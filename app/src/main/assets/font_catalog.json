@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "fonts": [
+    {
+      "id": "beleren2016",
+      "family_name": "Beleren2016",
+      "foundry": "MagicSetEditorPacks (Community / Open Pack)",
+      "license_note": "Included in MagicSetEditorPacks Font-Pack / Magic - Fonts for MSE templates.",
+      "availability": "installed_free",
+      "source_pack": "Magic - Fonts",
+      "purchase_url": null,
+      "download_url": null
+    },
+    {
+      "id": "mplantin",
+      "family_name": "MPlantin",
+      "foundry": "MagicSetEditorPacks (Open MSE Pack)",
+      "license_note": "Community MSE rules text font distributed with MagicSetEditorPacks.",
+      "availability": "installed_free",
+      "source_pack": "Magic - Fonts",
+      "purchase_url": null,
+      "download_url": null
+    },
+    {
+      "id": "relay_medium",
+      "family_name": "Relay-Medium",
+      "foundry": "MagicSetEditorPacks (Open Pack)",
+      "license_note": "Collector info font distributed in MagicSetEditorPacks.",
+      "availability": "installed_free",
+      "source_pack": "Magic - Fonts",
+      "purchase_url": null,
+      "download_url": null
+    },
+    {
+      "id": "matrix_small_caps_pack",
+      "family_name": "Matrix Bold Small Caps",
+      "foundry": "MagicSetEditorPacks (Other - Fonts)",
+      "license_note": "Non-Magic pack header font bundled with Full-Non-Magic-Pack.",
+      "availability": "installed_free",
+      "source_pack": "Other - Fonts",
+      "purchase_url": null,
+      "download_url": null
+    },
+    {
+      "id": "eb_garamond",
+      "family_name": "EB Garamond",
+      "foundry": "Georg Duffner / Octavio Pardo (SIL OFL 1.1)",
+      "license_note": "Open-source serif ideal for classic TCG rules & flavor text. Free under SIL OFL 1.1.",
+      "availability": "downloadable_open",
+      "source_pack": "Google Fonts / SIL OFL",
+      "purchase_url": null,
+      "download_url": "https://github.com/google/fonts/raw/main/ofl/ebgaramond/EBGaramond%5Bwght%5D.ttf"
+    },
+    {
+      "id": "cinzel",
+      "family_name": "Cinzel",
+      "foundry": "Natanael Gama (SIL OFL 1.1)",
+      "license_note": "Open-source classical display serif for card titles and set headers. Free under SIL OFL 1.1.",
+      "availability": "downloadable_open",
+      "source_pack": "Google Fonts / SIL OFL",
+      "purchase_url": null,
+      "download_url": "https://github.com/google/fonts/raw/main/ofl/cinzel/Cinzel%5Bwght%5D.ttf"
+    },
+    {
+      "id": "crimson_pro",
+      "family_name": "Crimson Pro",
+      "foundry": "Jacques Le Bailly (SIL OFL 1.1)",
+      "license_note": "High-legibility book serif for dense rules boxes. Free under SIL OFL 1.1.",
+      "availability": "downloadable_open",
+      "source_pack": "Google Fonts / SIL OFL",
+      "purchase_url": null,
+      "download_url": "https://github.com/google/fonts/raw/main/ofl/crimsonpro/CrimsonPro%5Bwght%5D.ttf"
+    },
+    {
+      "id": "libre_baskerville",
+      "family_name": "Libre Baskerville",
+      "foundry": "Impallari Type (SIL OFL 1.1)",
+      "license_note": "Traditional serif optimized for crisp small-point readability. Free under SIL OFL 1.1.",
+      "availability": "downloadable_open",
+      "source_pack": "Google Fonts / SIL OFL",
+      "purchase_url": null,
+      "download_url": "https://github.com/google/fonts/raw/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf"
+    },
+    {
+      "id": "spectral",
+      "family_name": "Spectral",
+      "foundry": "Production Type (SIL OFL 1.1)",
+      "license_note": "Versatile serif for modern fantasy card frames. Free under SIL OFL 1.1.",
+      "availability": "downloadable_open",
+      "source_pack": "Google Fonts / SIL OFL",
+      "purchase_url": null,
+      "download_url": "https://github.com/google/fonts/raw/main/ofl/spectral/Spectral-Regular.ttf"
+    },
+    {
+      "id": "oswald",
+      "family_name": "Oswald",
+      "foundry": "Vernon Adams (SIL OFL 1.1)",
+      "license_note": "Condensed gothic sans for compact stats, ATK/DEF, and collector footers. Free under SIL OFL 1.1.",
+      "availability": "downloadable_open",
+      "source_pack": "Google Fonts / SIL OFL",
+      "purchase_url": null,
+      "download_url": "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald%5Bwght%5D.ttf"
+    },
+    {
+      "id": "plantin_monotype",
+      "family_name": "Plantin",
+      "foundry": "Monotype Imaging",
+      "license_note": "Commercial desktop font license required from Monotype / MyFonts. Never bundled. Purchase in browser, then import your licensed .ttf/.otf/.zip file.",
+      "availability": "commercial_payment_required",
+      "source_pack": "Commercial Foundry",
+      "purchase_url": "https://www.myfonts.com/collections/plantin-font-monotype-imaging",
+      "download_url": null
+    },
+    {
+      "id": "matrix_ii_emigre",
+      "family_name": "Matrix II",
+      "foundry": "Emigre (Zuzana Licko)",
+      "license_note": "Commercial foundry license required from Emigre. Used by classic Yu-Gi-Oh! and older TCG title bars. Purchase in browser, then import your licensed font archive.",
+      "availability": "commercial_payment_required",
+      "source_pack": "Commercial Foundry",
+      "purchase_url": "https://www.emigre.com/Fonts/Matrix-II",
+      "download_url": null
+    },
+    {
+      "id": "itc_stone_serif",
+      "family_name": "ITC Stone Serif",
+      "foundry": "ITC / Monotype",
+      "license_note": "Commercial desktop license required from ITC / MyFonts. Frequently referenced by Yu-Gi-Oh! Series 9/10 templates.",
+      "availability": "commercial_payment_required",
+      "source_pack": "Commercial Foundry",
+      "purchase_url": "https://www.myfonts.com/collections/stone-serif-font-itc",
+      "download_url": null
+    },
+    {
+      "id": "goudy_medieval",
+      "family_name": "Goudy Medieval",
+      "foundry": "URW Type Foundry / MyFonts",
+      "license_note": "Commercial desktop license required. Used for classic fantasy frame titles and vintage editions.",
+      "availability": "commercial_payment_required",
+      "source_pack": "Commercial Foundry",
+      "purchase_url": "https://www.myfonts.com/search?query=Goudy+Medieval",
+      "download_url": null
+    },
+    {
+      "id": "gill_sans_pro",
+      "family_name": "Gill Sans",
+      "foundry": "Monotype Imaging",
+      "license_note": "Commercial desktop license required from Monotype / MyFonts. Commonly used in Pokémon TCG templates.",
+      "availability": "commercial_payment_required",
+      "source_pack": "Commercial Foundry",
+      "purchase_url": "https://www.myfonts.com/collections/gill-sans-font-monotype-imaging",
+      "download_url": null
+    },
+    {
+      "id": "futura_pt",
+      "family_name": "Futura",
+      "foundry": "Bauer Types / Linotype / MyFonts",
+      "license_note": "Commercial desktop license required. Used in Pokémon TCG stats, HP indicators, and modern sci-fi frames.",
+      "availability": "commercial_payment_required",
+      "source_pack": "Commercial Foundry",
+      "purchase_url": "https://www.myfonts.com/collections/futura-font-linotype",
+      "download_url": null
+    },
+    {
+      "id": "helvetica_neue",
+      "family_name": "Helvetica Neue",
+      "foundry": "Linotype / Monotype",
+      "license_note": "Commercial desktop license required from Linotype / MyFonts.",
+      "availability": "commercial_payment_required",
+      "source_pack": "Commercial Foundry",
+      "purchase_url": "https://www.myfonts.com/collections/neue-helvetica-font-linotype",
+      "download_url": null
+    },
+    {
+      "id": "optima_linotype",
+      "family_name": "Optima",
+      "foundry": "Linotype / Monotype",
+      "license_note": "Commercial desktop license required from Linotype / MyFonts. Used in sculpted humanist card titles.",
+      "availability": "commercial_payment_required",
+      "source_pack": "Commercial Foundry",
+      "purchase_url": "https://www.myfonts.com/collections/optima-font-linotype",
+      "download_url": null
+    },
+    {
+      "id": "itc_benguiat",
+      "family_name": "ITC Benguiat",
+      "foundry": "ITC / Monotype",
+      "license_note": "Commercial desktop license required from ITC / MyFonts.",
+      "availability": "commercial_payment_required",
+      "source_pack": "Commercial Foundry",
+      "purchase_url": "https://www.myfonts.com/collections/benguiat-font-itc",
+      "download_url": null
+    }
+  ]
+}

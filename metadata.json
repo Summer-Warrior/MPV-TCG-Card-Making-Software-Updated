@@ -1,0 +1,6 @@
+{
+  "name": "TCG Studio",
+  "description": "Native Android TCG card studio with 1:1 IRL editing, lossless MSE set/style parsing, Termux MSE bridge, commercial font licensing workflow, and upstream pack sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
