@@ -1,0 +1,105 @@
+name: Build Magic Set Editor ARM64 Binaries
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  build-mse-arm64:
+    name: Compile ARM64 MSE (Modern + Legacy) on Ubuntu 24.04
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git \
+            cmake \
+            g++ \
+            pkg-config \
+            make \
+            autoconf \
+            automake \
+            libwxgtk3.2-dev \
+            libboost-all-dev \
+            libhunspell-dev \
+            file
+
+      - name: Checkout Modern MSE (G-e-n-e-v-e-n-s-i-S/MagicSetEditor2)
+        uses: actions/checkout@v4
+        with:
+          repository: G-e-n-e-v-e-n-s-i-S/MagicSetEditor2
+          path: mse-modern-src
+          fetch-depth: 1
+
+      - name: Configure and Build Modern ARM64 MSE
+        working-directory: mse-modern-src
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+          mkdir -p "${GITHUB_WORKSPACE}/out-modern"
+          BIN_PATH="$(find build -maxdepth 4 -type f -executable -name 'magicseteditor' | head -n 1)"
+          if [ -z "${BIN_PATH}" ]; then
+            echo "ERROR: magicseteditor binary not found after modern CMake build." >&2
+            exit 1
+          fi
+          cp "${BIN_PATH}" "${GITHUB_WORKSPACE}/out-modern/magicseteditor-modern-arm64"
+          chmod +x "${GITHUB_WORKSPACE}/out-modern/magicseteditor-modern-arm64"
+          file "${GITHUB_WORKSPACE}/out-modern/magicseteditor-modern-arm64"
+
+      - name: Upload Modern ARM64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: magicseteditor-modern-arm64
+          path: out-modern/magicseteditor-modern-arm64
+          if-no-files-found: error
+
+      - name: Checkout Legacy MSE (twanvl/MagicSetEditor2)
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: twanvl/MagicSetEditor2
+          path: mse-legacy-src
+          fetch-depth: 1
+
+      - name: Configure and Build Legacy ARM64 MSE (Best Effort)
+        id: build_legacy
+        continue-on-error: true
+        working-directory: mse-legacy-src
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/out-legacy"
+          if [ -f CMakeLists.txt ]; then
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
+            cmake --build build -j"$(nproc)"
+            BIN_PATH="$(find build -maxdepth 4 -type f -executable -name 'magicseteditor' | head -n 1)"
+          elif [ -f configure.ac ] || [ -f configure ]; then
+            if [ ! -f configure ]; then autoreconf -i; fi
+            ./configure
+            make -j"$(nproc)"
+            BIN_PATH="$(find . -maxdepth 3 -type f -executable -name 'magicseteditor' | head -n 1)"
+          else
+            echo "No supported build file found in legacy repository." >&2
+            exit 1
+          fi
+          if [ -n "${BIN_PATH:-}" ] && [ -f "${BIN_PATH}" ]; then
+            cp "${BIN_PATH}" "${GITHUB_WORKSPACE}/out-legacy/magicseteditor-legacy-arm64"
+            chmod +x "${GITHUB_WORKSPACE}/out-legacy/magicseteditor-legacy-arm64"
+            file "${GITHUB_WORKSPACE}/out-legacy/magicseteditor-legacy-arm64"
+          else
+            echo "Legacy binary was not produced." >&2
+            exit 1
+          fi
+
+      - name: Upload Legacy ARM64 Artifact (If Produced)
+        if: ${{ steps.build_legacy.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: magicseteditor-legacy-arm64
+          path: out-legacy/magicseteditor-legacy-arm64
+          if-no-files-found: ignore

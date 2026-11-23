@@ -1,7 +1,10 @@
 package com.example.ui.workspace
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -69,6 +72,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -78,6 +82,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -95,6 +100,7 @@ import com.example.data.mse.MseCardView
 import com.example.data.mse.MseHitbox
 import com.example.data.mse.MseSetArchive
 import com.example.data.mse.MseStyleSpec
+import com.example.data.mse.MseTemplateCatalogRepository
 import com.example.data.mse.ResolvedOfflineFrame
 import com.example.data.settings.PhysicalCardProfile
 import com.example.data.settings.StudioSettings
@@ -190,7 +196,8 @@ fun CardsTabContent(
     var pendingCropUri by remember { mutableStateOf<Uri?>(null) }
     var showCardTableSheet by remember { mutableStateOf(false) }
 
-    val activeVariantUrl = offlineFrame?.activeVariant?.imageUrl
+    val activeVariant = offlineFrame?.activeVariant
+    val activeVariantUrl = activeVariant?.imageUrl
     var frameLoadFailedForUrl by remember(activeVariantUrl) { mutableStateOf(false) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -207,6 +214,7 @@ fun CardsTabContent(
 
     val isOnlineRendered = renderState is CardRenderState.Rendered
     val canShowUpstreamBaseFrame = !isOnlineRendered &&
+        activeVariant != null &&
         !activeVariantUrl.isNullOrBlank() &&
         !frameLoadFailedForUrl &&
         styleSpec.hasValidCompositeGeometry()
@@ -318,9 +326,9 @@ fun CardsTabContent(
                             .then(stageFitModifier)
                             .shadow(14.dp, RoundedCornerShape(12.dp), clip = false)
 
-                        if (canShowUpstreamBaseFrame && activeVariantUrl != null) {
+                        if (canShowUpstreamBaseFrame && activeVariant != null) {
                             RealUpstreamBaseFrameCompositor(
-                                frameImageUrl = activeVariantUrl,
+                                variant = activeVariant,
                                 styleSpec = styleSpec,
                                 card = activeCard,
                                 setCode = archive.document.setInfo.setCode,
@@ -390,8 +398,8 @@ fun CardsTabContent(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 14.dp),
+                            .padding(horizontal = 16.dp)
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -415,7 +423,10 @@ fun CardsTabContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    textAlign = TextAlign.Center,
                 )
             }
         }
@@ -432,7 +443,7 @@ fun CardsTabContent(
                 Row(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
@@ -519,7 +530,7 @@ fun CardsTabContent(
             }
         }
 
-        // ---- Clean MSE Bottom Card Bar (14.dp Horizontal Padding — Zero Edge-Touch on 360dp) ----
+        // ---- Clean MSE Bottom Card Bar (Explicit 16.dp Horizontal Padding — Zero Edge-Touch on 360dp) ----
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             modifier = Modifier.fillMaxWidth(),
@@ -529,7 +540,7 @@ fun CardsTabContent(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
@@ -691,13 +702,16 @@ fun CardsTabContent(
  * Real Upstream Base-Frame Compositor (Offline Preview):
  * - Displays the ACTUAL blank upstream `.mse-style` frame PNG/JPG from `MagicSetEditorPacks`
  *   (ZERO fake Compose Canvas or SVG card frames).
- * - Maps parsed `.mse-style` bounding boxes proportionally onto the card surface.
- * - Places user artwork strictly inside the parsed `image` box (respecting `z index`, and keeping
- *   the art window strictly empty with a subtle tap hint when `card.image == null`).
+ * - Enforces runtime portrait bitmap dimension validation (`width >= 250 && height >= 350 &&
+ *   height / width in 1.25..1.65`) and immediately falls back to [StructuredOfflineCardLayout]
+ *   on invalid assets — NEVER stretching tiny overlay PNGs onto a pitch-black card.
+ * - Maps ONLY core visible card fields (strictly excluding `alias`, `border color`, `card color *`,
+ *   `loyalty*`, and hidden/conditional fields) with guaranteed luminance-aware text contrast.
+ * - Keeps artwork strictly empty (`card.image == null`) with a subtle transparent tap hint.
  */
 @Composable
 private fun RealUpstreamBaseFrameCompositor(
-    frameImageUrl: String,
+    variant: FrameVariantOption,
     styleSpec: MseStyleSpec,
     card: MseCardView?,
     setCode: String,
@@ -709,6 +723,7 @@ private fun RealUpstreamBaseFrameCompositor(
     onClearArt: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val frameImageUrl = variant.imageUrl
     val cardW = styleSpec.cardWidthPx.coerceAtLeast(1).toFloat()
     val cardH = styleSpec.cardHeightPx.coerceAtLeast(1).toFloat()
 
@@ -718,13 +733,15 @@ private fun RealUpstreamBaseFrameCompositor(
         }
     }
 
+    var loadedFrameBitmap by remember(frameImageUrl) { mutableStateOf<Bitmap?>(null) }
+
     val artBox = styleSpec.artHitbox
     val artBehindFrame = artBox != null && artBox.zIndex <= 0 && frameImageUrl.endsWith(".png", ignoreCase = true)
 
     BoxWithConstraints(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF14161B)),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         val density = LocalDensity.current
         val containerW = constraints.maxWidth.toFloat()
@@ -759,8 +776,26 @@ private fun RealUpstreamBaseFrameCompositor(
             contentDescription = "${styleSpec.shortName} upstream card frame",
             contentScale = ContentScale.FillBounds,
             onState = { state ->
-                if (state is AsyncImagePainter.State.Error) {
-                    onFrameImageError()
+                when (state) {
+                    is AsyncImagePainter.State.Success -> {
+                        val drawable = state.result.drawable
+                        val bmp = (drawable as? BitmapDrawable)?.bitmap
+                        val w = bmp?.width ?: drawable.intrinsicWidth
+                        val h = bmp?.height ?: drawable.intrinsicHeight
+                        if (!MseTemplateCatalogRepository.isValidPortraitCardDimensions(w, h)) {
+                            loadedFrameBitmap = null
+                            onFrameImageError()
+                        } else {
+                            loadedFrameBitmap = bmp
+                        }
+                    }
+
+                    is AsyncImagePainter.State.Error -> {
+                        loadedFrameBitmap = null
+                        onFrameImageError()
+                    }
+
+                    else -> Unit
                 }
             },
             modifier = Modifier.fillMaxSize(),
@@ -834,34 +869,34 @@ private fun RealUpstreamBaseFrameCompositor(
                         }
                     }
                 } else {
-                    // Strictly NO default artwork: subtle transparent tap hint only
+                    // Strictly NO default artwork: clean subtle transparent tap area only
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(3.dp),
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color.Black.copy(alpha = 0.24f))
+                            .background(Color.Black.copy(alpha = 0.28f))
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Default.AddPhotoAlternate,
                             contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.78f),
+                            tint = Color(0xFFF5F5F5).copy(alpha = 0.88f),
                             modifier = Modifier.size(18.dp),
                         )
                         Text(
                             text = stringResource(R.string.tap_to_add_artwork),
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.78f),
+                            color = Color(0xFFF5F5F5).copy(alpha = 0.88f),
                         )
                     }
                 }
             }
         }
 
-        // Layer 4: Coordinate-Mapped Tappable Live Text Previews
-        val textHitboxes = remember(styleSpec.hitboxes) {
-            prepareOverlayTextHitboxes(styleSpec.hitboxes)
+        // Layer 4: Core Visible Card Fields Only — Guaranteed High-Contrast Text (NEVER black-on-black)
+        val textHitboxes = remember(styleSpec.hitboxes, styleSpec.game) {
+            prepareOverlayTextHitboxes(styleSpec.hitboxes, styleSpec.game)
         }
 
         textHitboxes.forEach { hitbox ->
@@ -876,26 +911,66 @@ private fun RealUpstreamBaseFrameCompositor(
             val isEmpty = resolvedValue.isBlank()
             val displayText = if (isEmpty) placeholder else resolvedValue
 
-            val fontSizeSp = ((hitbox.fontSize ?: defaultFontSizeForField(fieldKey)) * scaleFactor)
-                .coerceIn(7.5f, 18f).sp
-            val parsedColor = parseHitboxColor(hitbox.fontColorHex)
-            val textColor = when {
-                isEmpty -> parsedColor.copy(alpha = 0.48f)
-                else -> parsedColor
+            // Sample actual pixel luminance under this hitbox on the loaded base-frame bitmap
+            val regionLuminance = remember(loadedFrameBitmap, hitbox, variant.avgLuminance, fieldKey) {
+                val sampled = loadedFrameBitmap?.let { bmp ->
+                    sampleRegionLuminance(
+                        bitmap = bmp,
+                        normLeft = (hitbox.left / cardW).coerceIn(0f, 0.98f),
+                        normTop = (hitbox.top / cardH).coerceIn(0f, 0.98f),
+                        normWidth = (hitbox.width / cardW).coerceIn(0.02f, 1f),
+                        normHeight = (hitbox.height / cardH).coerceIn(0.02f, 1f),
+                    )
+                }
+                when {
+                    sampled != null -> sampled
+                    fieldKey == "illustrator" || fieldKey == "copyright" -> 0.12f
+                    else -> variant.avgLuminance
+                }
             }
+            val isDarkRegion = regionLuminance < 0.46f
+
+            val fontSizeSp = ((hitbox.fontSize ?: defaultFontSizeForField(fieldKey)) * scaleFactor)
+                .coerceIn(8f, 18f).sp
+            val textColor = when {
+                isDarkRegion && isEmpty -> Color(0xFFF5F5F5).copy(alpha = 0.78f)
+                isDarkRegion -> Color(0xFFF5F5F5)
+                isEmpty -> Color(0xFF111111).copy(alpha = 0.62f)
+                else -> Color(0xFF111111)
+            }
+            val textShadow = if (isDarkRegion) {
+                Shadow(
+                    color = Color(0xCC000000),
+                    offset = Offset(0f, 1.2f),
+                    blurRadius = 3f,
+                )
+            } else {
+                null
+            }
+            val placeholderBackdrop = when {
+                !isEmpty -> Color.Transparent
+                isDarkRegion -> Color(0x3D000000)
+                else -> Color(0x47FFFFFF)
+            }
+
             val textAlign = when {
                 hitbox.alignment?.contains("right", ignoreCase = true) == true ||
-                    fieldKey == "casting cost" -> TextAlign.End
+                    fieldKey == "casting cost" || fieldKey == "cost" -> TextAlign.End
 
                 hitbox.alignment?.contains("center", ignoreCase = true) == true ||
-                    fieldKey == "pt" || fieldKey == "power" || fieldKey == "toughness" -> TextAlign.Center
+                    fieldKey == "pt" || fieldKey == "power" || fieldKey == "toughness" ||
+                    fieldKey == "atk" || fieldKey == "def" -> TextAlign.Center
 
                 else -> TextAlign.Start
             }
             val contentAlignment = when (textAlign) {
                 TextAlign.End -> Alignment.CenterEnd
                 TextAlign.Center -> Alignment.Center
-                else -> if (fieldKey.contains("rule") || fieldKey.contains("text") || fieldKey.contains("flavor")) {
+                else -> if (
+                    fieldKey.contains("rule") || fieldKey == "text" ||
+                    fieldKey.contains("flavor") || fieldKey.contains("desc") ||
+                    fieldKey == "effect"
+                ) {
                     Alignment.TopStart
                 } else {
                     Alignment.CenterStart
@@ -907,27 +982,39 @@ private fun RealUpstreamBaseFrameCompositor(
                     .offset { IntOffset(leftPx.roundToInt(), topPx.roundToInt()) }
                     .width(widthDp.coerceAtLeast(24.dp))
                     .height(heightDp.coerceAtLeast(16.dp))
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(placeholderBackdrop)
                     .clickable {
                         onTapField(buildEditTargetForHitbox(fieldKey, card))
                     }
-                    .padding(horizontal = 2.dp, vertical = 1.dp)
+                    .padding(horizontal = 3.dp, vertical = 1.dp)
                     .testTag("hitbox_${fieldKey.replace(' ', '_')}"),
                 contentAlignment = contentAlignment,
             ) {
                 Text(
                     text = displayText,
-                    fontFamily = customFontFamily ?: MaterialTheme.typography.bodyMedium.fontFamily,
-                    fontSize = fontSizeSp,
-                    lineHeight = (fontSizeSp.value * 1.18f).sp,
-                    fontWeight = if (fieldKey == "name" || fieldKey == "pt" || fieldKey == "power" || fieldKey == "toughness") {
-                        FontWeight.SemiBold
-                    } else {
-                        FontWeight.Normal
-                    },
-                    fontStyle = if (fieldKey.contains("flavor")) FontStyle.Italic else FontStyle.Normal,
-                    color = textColor,
-                    textAlign = textAlign,
-                    maxLines = if (fieldKey.contains("rule") || fieldKey.contains("text") || fieldKey.contains("flavor")) {
+                    style = TextStyle(
+                        fontFamily = customFontFamily ?: MaterialTheme.typography.bodyMedium.fontFamily,
+                        fontSize = fontSizeSp,
+                        lineHeight = (fontSizeSp.value * 1.18f).sp,
+                        fontWeight = if (
+                            fieldKey == "name" || fieldKey == "title" ||
+                            fieldKey == "pt" || fieldKey == "power" || fieldKey == "toughness"
+                        ) {
+                            FontWeight.SemiBold
+                        } else {
+                            FontWeight.Normal
+                        },
+                        fontStyle = if (fieldKey.contains("flavor")) FontStyle.Italic else FontStyle.Normal,
+                        color = textColor,
+                        textAlign = textAlign,
+                        shadow = textShadow,
+                    ),
+                    maxLines = if (
+                        fieldKey.contains("rule") || fieldKey == "text" ||
+                        fieldKey.contains("flavor") || fieldKey.contains("desc") ||
+                        fieldKey == "effect"
+                    ) {
                         6
                     } else {
                         1
@@ -938,6 +1025,44 @@ private fun RealUpstreamBaseFrameCompositor(
             }
         }
     }
+}
+
+private fun sampleRegionLuminance(
+    bitmap: Bitmap,
+    normLeft: Float,
+    normTop: Float,
+    normWidth: Float,
+    normHeight: Float,
+): Float? {
+    val bw = bitmap.width
+    val bh = bitmap.height
+    if (bw <= 0 || bh <= 0) return null
+    val x0 = (normLeft * bw).toInt().coerceIn(0, bw - 1)
+    val y0 = (normTop * bh).toInt().coerceIn(0, bh - 1)
+    val x1 = ((normLeft + normWidth) * bw).toInt().coerceIn(x0 + 1, bw)
+    val y1 = ((normTop + normHeight) * bh).toInt().coerceIn(y0 + 1, bh)
+
+    val stepX = ((x1 - x0) / 5).coerceAtLeast(1)
+    val stepY = ((y1 - y0) / 4).coerceAtLeast(1)
+    var sum = 0.0
+    var count = 0
+    var y = y0
+    while (y < y1) {
+        var x = x0
+        while (x < x1) {
+            val px = bitmap.getPixel(x, y)
+            if (AndroidColor.alpha(px) >= 128) {
+                val r = AndroidColor.red(px) / 255.0
+                val g = AndroidColor.green(px) / 255.0
+                val b = AndroidColor.blue(px) / 255.0
+                sum += 0.2126 * r + 0.7152 * g + 0.0722 * b
+                count++
+            }
+            x += stepX
+        }
+        y += stepY
+    }
+    return if (count > 0) (sum / count).toFloat().coerceIn(0f, 1f) else null
 }
 
 @Composable
@@ -1356,17 +1481,73 @@ private fun InvisibleAlignedHitboxes(
     }
 }
 
-// ---- Overlay Helpers ----
+// ---- Strict Core Visible Card Fields Allowlist & Exclusion Rules ----
 
-private val IGNORED_OVERLAY_FIELDS = setOf(
-    "image", "art", "image 1", "card image",
-    "border", "card color", "background", "frame", "card frame", "card background",
-    "rarity", "watermark", "set symbol", "symbol", "stamp", "foil", "indicator",
-    "casting cost 2", "copyright",
+private val MAGIC_VISIBLE_TEXT_FIELDS = setOf(
+    "name",
+    "casting cost",
+    "type",
+    "super type",
+    "sub type",
+    "rule text",
+    "flavor text",
+    "pt",
+    "power",
+    "toughness",
+    "illustrator",
 )
 
-private fun prepareOverlayTextHitboxes(raw: List<MseHitbox>): List<MseHitbox> {
-    val filtered = raw.filter { it.field.lowercase() !in IGNORED_OVERLAY_FIELDS }
+private val NON_MAGIC_VISIBLE_TEXT_FIELDS = setOf(
+    "name",
+    "title",
+    "cost",
+    "type",
+    "attribute",
+    "level",
+    "rank",
+    "rule text",
+    "text",
+    "desc",
+    "description",
+    "effect",
+    "flavor text",
+    "atk",
+    "def",
+    "hp",
+    "power",
+    "toughness",
+    "health",
+    "attack",
+    "illustrator",
+    "copyright",
+)
+
+private val STRICTLY_EXCLUDED_FIELDS = setOf(
+    "image", "art", "image 1", "card image",
+    "alias", "border", "border color",
+    "card color", "card color 2", "card color 3",
+    "background", "frame", "card frame", "card background",
+    "styling", "watermark", "indicator", "stamp", "rarity",
+    "set code", "card number", "loyalty", "special text",
+    "notes", "time created", "time modified", "copyright 2",
+    "set symbol", "symbol", "foil", "casting cost 2",
+)
+
+internal fun isAllowedOfflineOverlayField(hitbox: MseHitbox, gameId: String): Boolean {
+    if (hitbox.isHiddenOrConditional) return false
+    val key = hitbox.field.trim().lowercase()
+    if (key in STRICTLY_EXCLUDED_FIELDS) return false
+    if (key.startsWith("loyalty") || key.startsWith("card color")) return false
+    val allowlist = if (gameId.equals("magic", ignoreCase = true)) {
+        MAGIC_VISIBLE_TEXT_FIELDS
+    } else {
+        NON_MAGIC_VISIBLE_TEXT_FIELDS
+    }
+    return key in allowlist
+}
+
+internal fun prepareOverlayTextHitboxes(raw: List<MseHitbox>, gameId: String): List<MseHitbox> {
+    val filtered = raw.filter { isAllowedOfflineOverlayField(it, gameId) }
     val result = mutableListOf<MseHitbox>()
     val superBox = filtered.firstOrNull { it.field.equals("super type", ignoreCase = true) }
     val subBox = filtered.firstOrNull { it.field.equals("sub type", ignoreCase = true) }
@@ -1426,11 +1607,11 @@ private fun resolveOverlayTextValue(fieldKey: String, card: MseCardView?, setCod
 
 private fun resolveCleanPlaceholder(fieldKey: String): String {
     return when (fieldKey) {
-        "name" -> "Card Name"
-        "casting cost" -> "Cost"
+        "name", "title" -> "Card Name"
+        "casting cost", "cost" -> "Cost"
         "type", "super type" -> "Card Type"
         "sub type" -> "Subtype"
-        "rule text", "text" -> "Rules text"
+        "rule text", "text", "desc", "description", "effect" -> "Tap to add rules text"
         "flavor text" -> "Flavor text"
         "pt" -> "P / T"
         "power" -> "P"
@@ -1443,20 +1624,13 @@ private fun resolveCleanPlaceholder(fieldKey: String): String {
 }
 
 private fun defaultFontSizeForField(fieldKey: String): Float = when (fieldKey) {
-    "name" -> 16f
-    "casting cost" -> 13f
+    "name", "title" -> 16f
+    "casting cost", "cost" -> 13f
     "type", "super type", "sub type" -> 13f
-    "pt", "power", "toughness" -> 14f
-    "illustrator" -> 9f
+    "pt", "power", "toughness", "atk", "def" -> 14f
+    "illustrator", "copyright" -> 9f
     "flavor text" -> 11f
     else -> 12f
-}
-
-private fun parseHitboxColor(hex: String?): Color {
-    if (hex.isNullOrBlank()) return Color(0xFF14161A)
-    return runCatching {
-        Color(android.graphics.Color.parseColor(hex))
-    }.getOrDefault(Color(0xFF14161A))
 }
 
 private fun buildEditTargetForHitbox(fieldKey: String, card: MseCardView?): CardFieldEditTarget {

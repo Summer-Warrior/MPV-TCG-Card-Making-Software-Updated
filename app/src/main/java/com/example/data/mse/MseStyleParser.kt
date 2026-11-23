@@ -123,6 +123,7 @@ object MseStyleParser {
         var fieldFontSize: Float? = null
         var fieldFontColorHex: String? = null
         var fieldAlignment: String? = null
+        var fieldHiddenOrConditional = false
 
         fun flushCurrentField() {
             val fieldName = currentField ?: return
@@ -152,6 +153,7 @@ object MseStyleParser {
                     fontSize = fieldFontSize,
                     fontColorHex = fieldFontColorHex,
                     alignment = fieldAlignment,
+                    isHiddenOrConditional = fieldHiddenOrConditional,
                 )
             }
 
@@ -168,6 +170,7 @@ object MseStyleParser {
             fieldFontSize = null
             fieldFontColorHex = null
             fieldAlignment = null
+            fieldHiddenOrConditional = false
         }
 
         for (rawLine in lines) {
@@ -250,6 +253,20 @@ object MseStyleParser {
                                 "bottom" -> bottom = extractNumeric(value)
                                 "z index" -> zIndex = extractNumeric(value)?.toInt() ?: 0
                                 "alignment" -> fieldAlignment = value
+                                "visible" -> {
+                                    val lowVis = value.lowercase()
+                                    if (lowVis == "false" ||
+                                        lowVis == "no" ||
+                                        lowVis.contains("script:") ||
+                                        lowVis.contains('{') ||
+                                        lowVis.contains("if ") ||
+                                        lowVis.contains("styling.") ||
+                                        lowVis.contains("!=") ||
+                                        lowVis.contains("==")
+                                    ) {
+                                        fieldHiddenOrConditional = true
+                                    }
+                                }
                                 "font" -> subBlock = "font"
                                 "choice images" -> subBlock = "choice images"
                                 "default" -> {
@@ -258,7 +275,7 @@ object MseStyleParser {
                                             usesScriptedBackground = true
                                         }
                                         extractImageReference(value)?.let { imgRef ->
-                                            if (defaultFrameImage == null && !isNonFrameAsset(imgRef)) {
+                                            if (defaultFrameImage == null && !isBlacklistedNonCardAsset(imgRef)) {
                                                 defaultFrameImage = imgRef
                                             }
                                         }
@@ -303,7 +320,7 @@ object MseStyleParser {
                                         usesScriptedBackground = true
                                     }
                                     val imgRef = extractImageReference(choiceVal)
-                                    if (imgRef != null && !isNonFrameAsset(imgRef)) {
+                                    if (imgRef != null && !isBlacklistedNonCardAsset(imgRef)) {
                                         baseFrameChoices[choiceKey] = imgRef
                                         if (choiceKey.equals("default", ignoreCase = true) && defaultFrameImage == null) {
                                             defaultFrameImage = imgRef
@@ -450,12 +467,26 @@ object MseStyleParser {
         return match.groupValues[1].trim()
     }
 
-    private fun isNonFrameAsset(filename: String): Boolean {
-        val lower = filename.lowercase()
-        return lower.contains("mask") ||
-            lower.contains("symbol") ||
-            lower.contains("icon") ||
-            lower.contains("card-sample")
+    private val NON_CARD_OVERLAY_BLACKLIST = listOf(
+        "slice", "loyalty", "flash", "dot", "mask", "pt", "stamp", "holo",
+        "crown", "nyx", "symbol", "icon", "watermark", "border", "overlay",
+        "arrow", "bar", "blend", "foil", "sample", "flip", "transform",
+        "dfc", "mdfc", "saga", "level", "class", "chapter", "pip", "mana",
+        "rare", "common", "uncommon", "mythic", "tombstone", "companion",
+        "mutate", "adventure", "lesson", "fuse", "split", "modal",
+        "snow_overlay", "shadow", "glow", "logo",
+    )
+
+    /**
+     * Strict non-card overlay/icon/mask/symbol filename blacklist.
+     * Rejects tiny overlays such as `20slice.png`, `flashdot.png`, `loyalty.png`,
+     * `loyaltydown.png`, `loyaltynaught.png`, masks, stamps, symbols, and card-back/sample images.
+     */
+    fun isBlacklistedNonCardAsset(filenameOrPath: String): Boolean {
+        val fileNameOnly = filenameOrPath.substringAfterLast('/').lowercase()
+        if (fileNameOnly.isBlank()) return true
+        if (fileNameOnly.contains("back") && !fileNameOnly.contains("background")) return true
+        return NON_CARD_OVERLAY_BLACKLIST.any { token -> fileNameOnly.contains(token) }
     }
 
     private fun extractFontNames(raw: String): List<String> {

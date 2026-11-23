@@ -126,4 +126,21 @@ All phases (Phases 1–5) MUST preserve this clean, responsive (360dp–412dp ph
   6. Persists the catalog locally to JSON disk cache immediately with incremental sync progress feedback and manual Refresh Catalog action, merging local `GET /templates` when the Bridge is online.
   7. Scans `Magic - Fonts` and `Other - Fonts` via the same 1-call `contents` endpoint so all real MSE pack fonts appear in the Searchable Font Dropdown.
 
+---
 
+## 11. HARDENED OFFLINE REAL-FRAME RESOLVER & VISIBLE FIELD RULES
+When the local MSE Bridge is offline, the Android client MUST strictly enforce these visual integrity gates (never drawing fake Compose Canvas card frames and never stretching tiny icon/overlay PNGs):
+1. **Strict Non-Card Asset Blacklist:** Reject any filename/path containing non-card overlay/icon/mask tokens (`slice`, `loyalty`, `flash`, `dot`, `mask`, `pt`, `stamp`, `holo`, `crown`, `nyx`, `symbol`, `icon`, `watermark`, `border`, `overlay`, `arrow`, `bar`, `blend`, `foil`, `sample`, `back` except `background`, `flip`, `transform`, `dfc`, `mdfc`, `saga`, `level`, `class`, `chapter`, `pip`, `mana`, `rare`, `common`, `uncommon`, `mythic`, `tombstone`, `companion`, `mutate`, `adventure`, `lesson`, `fuse`, `split`, `modal`, `snow_overlay`, `shadow`, `glow`, `logo`).
+2. **Real Full-Card Frame Discovery:** Resolve explicit `choice images:` / `card color:` base frames first, then Magic base frames (`ccard`, `wcard`, `ucard`, `bcard`, `rcard`, `gcard`, `mcard`, `acard`, `lcard`) from the active style, `cards/` subfolder, `magic-m15-altered.mse-style`, or `magic-modules.mse-include/cards`; for Non-Magic styles, inspect the style root and immediate subfolders (`cards/`, `frames/`, `bg/`). Display full clean human-readable labels (`Colorless`, `White`, `Blue`, `Black`, `Red`, `Green`, `Gold`, `Artifact`, `Land`, or cleaned Non-Magic names).
+3. **Mandatory Portrait Card Bitmap Validation Gate:** Every candidate frame MUST be validated (`width >= 250 && height >= 350 && height/width in 1.25f..1.65f`) before rendering (cached in `CatalogDiskCache` and re-checked on runtime `BitmapDrawable`). If no valid full-card portrait frame passes, fall back cleanly to `StructuredOfflineCardLayout`.
+4. **Visible Core-Field Allowlist & Luminance-Aware Contrast:** Parse `visible:` (`false`, `no`, or conditional scripts) as hidden/conditional and filter Offline overlays to core visible card fields only (Magic: `name`, `casting cost`, `type`, `super type`, `sub type`, `rule text`, `flavor text`, `pt`, `illustrator`, `copyright`; Non-Magic: core non-internal text fields, strictly excluding `alias`, `border color`, `card color 2`, `loyalty`, `stamp`, `level`, `chapter`, `transform`, `indicator`, `foil`, `notes`, `stylesheet`). Sample pixel luminance behind each hitbox to guarantee legible `#111111` text on light regions and `#F5F5F5` + drop shadow on dark regions, while keeping the artwork region strictly empty (`image == null`).
+
+---
+
+## 12. REPO-ROOT ON-DEVICE TERMUX ARM64 MSE BRIDGE & CI COMPILER LAYOUT
+Located at the repository root **outside** the Android `:app` Gradle module (`settings.gradle.kts` includes only `:app`):
+* `/.github/workflows/build-mse-arm64.yml` — Native ARM64 Ubuntu 24.04 workflow compiling unmodified `G-e-n-e-v-e-n-s-i-S/MagicSetEditor2` (`magicseteditor-modern-arm64`) and best-effort `twanvl/MagicSetEditor2` (`magicseteditor-legacy-arm64`).
+* `/bridge/requirements.txt` — Python dependencies (`fastapi`, `uvicorn`, `python-multipart`, `httpx`, `Pillow`).
+* `/bridge/sync_upstream.py` — Delta-only GitHub Branches/Compare/Trees + `raw.githubusercontent.com` synchronizer populating read-only `bridge/workspace/upstream/<split_id>/` (preserving `bridge/workspace/custom_templates/`) and installing `.ttf`/`.otf` fonts into `~/.local/share/fonts/mse-studio/` + `fc-cache -fv`.
+* `/bridge/server.py` — FastAPI localhost server (`127.0.0.1:8765`) implementing `GET /health`, `POST /upstream/sync`, `POST /sets/render`, `GET /templates`, `POST /templates/validate`, `GET /fonts`, and `POST /fonts/import`, invoking unmodified `xvfb-run -a <mse_binary> --cli --raw`.
+* `/bridge/setup_termux.sh` & `/bridge/start_bridge.sh` — Idempotent Termux `proot-distro` Ubuntu ARM64 setup and localhost launch scripts, surfaced via 1-tap copyable setup cards inside the Android app's **Bridge & Termux** modal.

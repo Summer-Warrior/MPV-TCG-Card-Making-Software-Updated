@@ -56,16 +56,6 @@ import com.example.ui.theme.JetBrainsMonoFamily
 import com.example.ui.theme.StatusConnected
 import com.example.ui.theme.StatusOfflineAmber
 
-private const val TERMUX_STARTUP_SNIPPET = """# Inside Termux ARM64 (Ubuntu proot / native ARM64):
-# 1. Verify upstream MSE CLI binaries:
-magicseteditor --version
-# 2. Start your local MSE Bridge on 127.0.0.1:8765:
-mse-bridge --host 127.0.0.1 --port 8765 \
-  --modern-bin ~/mse-modern/magicseteditor \
-  --legacy-bin ~/mse-legacy/magicseteditor
-# 3. Verify health endpoint:
-curl -s http://127.0.0.1:8765/health"""
-
 /**
  * Termux ARM64 MSE Bridge & Diagnostics Screen (Section 2).
  * Provides live endpoint verification, editable Bridge URL, engine split routing,
@@ -88,7 +78,14 @@ fun BridgeDiagnosticsScreen(
 ) {
     val context = LocalContext.current
     var urlInput by remember(settings.bridgeBaseUrl) { mutableStateOf(settings.bridgeBaseUrl) }
-    var copiedNotice by remember { mutableStateOf(false) }
+    var copiedStepId by remember { mutableStateOf<String?>(null) }
+    val displayHostPort = remember(urlInput) {
+        urlInput.trim()
+            .removePrefix("http://")
+            .removePrefix("https://")
+            .trimEnd('/')
+            .ifBlank { "127.0.0.1:8765" }
+    }
     var validateTemplateId by remember { mutableStateOf("custom-test.mse-style") }
     var validateStyleSource by remember {
         mutableStateOf(
@@ -200,7 +197,7 @@ fun BridgeDiagnosticsScreen(
                                 .weight(1f)
                                 .testTag("diagnostics_save_url_button"),
                         ) {
-                            Text(stringResource(R.string.bridge_save_url))
+                            Text("Test & Connect ($displayHostPort)", maxLines = 1)
                         }
                         OutlinedButton(
                             onClick = {
@@ -260,7 +257,7 @@ fun BridgeDiagnosticsScreen(
             }
         }
 
-        // ---- Termux ARM64 Startup Guide ----
+        // ---- Termux ARM64 3-Step Setup & Launch Guide ----
         item {
             Surface(
                 shape = MaterialTheme.shapes.medium,
@@ -270,57 +267,30 @@ fun BridgeDiagnosticsScreen(
             ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Terminal,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.secondary,
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = stringResource(R.string.bridge_termux_help_title),
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                cm.setPrimaryClip(ClipData.newPlainText("Termux MSE Bridge", TERMUX_STARTUP_SNIPPET))
-                                copiedNotice = true
-                            },
-                            modifier = Modifier.testTag("diagnostics_copy_termux"),
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy Termux startup commands")
-                        }
-                    }
-
-                    Surface(
-                        shape = MaterialTheme.shapes.small,
-                        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Terminal,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.secondary,
+                        )
+                        Spacer(Modifier.width(8.dp))
                         Text(
-                            text = TERMUX_STARTUP_SNIPPET,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFamily = JetBrainsMonoFamily,
-                            ),
-                            color = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.padding(10.dp),
+                            text = stringResource(R.string.bridge_termux_help_title),
+                            style = MaterialTheme.typography.titleMedium,
                         )
                     }
 
-                    if (copiedNotice) {
-                        Text(
-                            text = "Copied Termux startup commands to clipboard.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.tertiary,
+                    TERMUX_SETUP_STEPS.forEach { step ->
+                        TermuxStepCard(
+                            step = step,
+                            isCopied = copiedStepId == step.id,
+                            onCopy = {
+                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText(step.title, step.command))
+                                copiedStepId = step.id
+                            },
                         )
                     }
                 }

@@ -1,6 +1,8 @@
 package com.example.data.mse
 
 import android.content.Context
+import android.graphics.BitmapFactory
+import android.graphics.Color as AndroidColor
 import com.example.data.bridge.BridgeTemplateDto
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
@@ -352,14 +354,17 @@ class MseTemplateCatalogRepository(
     }
 
     /**
-     * Resolves real upstream blank base-frame PNG/JPG variants for an active `.mse-style`
-     * for the Offline Real Upstream Base-Frame Compositor (ZERO fake Compose-drawn frames).
-     *
-     * Strategy:
-     * 1. Uses parsed `baseFrameChoices` & `defaultFrameImage` directly from the `.mse-style` file if present.
-     * 2. If scripted (`{ card_background() }`) or empty, performs at most 1 cached `contents` lookup on
-     *    the active style folder and (if needed) its primary `depends on:` `.mse-include`/`.mse-style`
-     *    package, filtering strictly for real blank frame PNG/JPGs (excluding masks/symbols/icons/samples).
+     * Strict Real Full-Card Frame Resolver for Offline Base-Frame Preview (ZERO fake Compose frames):
+     * 1. Parses explicit `baseFrameChoices` & `defaultFrameImage` from `.mse-style/style`, strictly
+     *    rejecting blacklisted non-card overlays/icons/masks/symbols.
+     * 2. For Magic M15/modern/scripted styles, resolves real full-card base frames (`ccard`, `wcard`,
+     *    `ucard`, `bcard`, `rcard`, `gcard`, `mcard`, `acard`, `lcard`) from the active style folder,
+     *    `data/magic-m15-altered.mse-style/`, and `data/magic-modules.mse-include/cards/` via cached
+     *    1-call GitHub contents lookups — NEVER grabbing arbitrary top-level overlay PNGs.
+     * 3. For Non-Magic styles, inspects the style folder and immediate subfolders (`cards/`, `frames/`, `bg/`)
+     *    while strictly applying the blacklist.
+     * 4. Runs the MANDATORY Portrait Card Bitmap Validation Gate (`width >= 250 && height >= 350 &&
+     *    height/width in 1.25..1.65`) before allowing ANY image as a frame or variant chip.
      */
     suspend fun resolveOfflineFrameVariants(style: DiscoveredStyle): List<FrameVariantOption> =
         withContext(Dispatchers.IO) {
@@ -367,26 +372,29 @@ class MseTemplateCatalogRepository(
                 return@withContext emptyList()
             }
 
-            val variants = linkedMapOf<String, FrameVariantOption>()
+            val candidates = linkedMapOf<String, FrameVariantOption>()
+            val isMagic = style.gameId.equals("magic", ignoreCase = true)
 
-            // 1. Direct choice images & default image parsed from the `.mse-style/style` file
+            // 1. Direct choice images & default image parsed from `.mse-style/style`
             style.baseFrameChoices.forEach { (choiceKey, imgFile) ->
-                if (!isExcludedFrameFilename(imgFile)) {
-                    val cleanKey = choiceKey.trim().lowercase()
+                if (!MseStyleParser.isBlacklistedNonCardAsset(imgFile)) {
+                    val cleanKey = normalizeVariantKey(choiceKey, isMagic)
                     val url = resolveAssetUrlForStyle(style, imgFile)
-                    variants[cleanKey] = FrameVariantOption(
-                        key = cleanKey,
-                        label = prettifyVariantLabel(choiceKey),
-                        imageUrl = url,
-                        swatchColorHex = inferSwatchHex(choiceKey),
-                    )
+                    if (!candidates.containsKey(cleanKey)) {
+                        candidates[cleanKey] = FrameVariantOption(
+                            key = cleanKey,
+                            label = prettifyVariantLabel(cleanKey),
+                            imageUrl = url,
+                            swatchColorHex = inferSwatchHex(cleanKey),
+                        )
+                    }
                 }
             }
 
             style.defaultFrameImage?.let { defaultImg ->
-                if (variants.isEmpty() && !isExcludedFrameFilename(defaultImg)) {
+                if (candidates.isEmpty() && !MseStyleParser.isBlacklistedNonCardAsset(defaultImg)) {
                     val url = resolveAssetUrlForStyle(style, defaultImg)
-                    variants["default"] = FrameVariantOption(
+                    candidates["default"] = FrameVariantOption(
                         key = "default",
                         label = "Default",
                         imageUrl = url,
@@ -395,59 +403,160 @@ class MseTemplateCatalogRepository(
                 }
             }
 
-            // 2. If scripted or still needing color/frame variants, inspect cached folder contents
-            if (variants.isEmpty() || style.usesScriptedBackground) {
-                val styleImages = fetchOrLoadFolderImages(
-                    repo = style.packRepo,
-                    branch = style.packBranch,
-                    folderName = style.folderName,
-                )
-                addDiscoveredFolderFrames(
-                    into = variants,
-                    repo = style.packRepo,
-                    branch = style.packBranch,
-                    folderName = style.folderName,
-                    gameId = style.gameId,
-                    files = styleImages,
-                )
+            // 2. Folder & dependency discovery
+            if (candidates.isEmpty() || style.usesScriptedBackground) {
+                if (isMagic) {
+                    // Check active style folder ONLY for real Magic base-card images (never arbitrary overlays)
+                    val styleListing = fetchOrLoadFolderListing(
+                        repo = style.packRepo,
+                        branch = style.packBranch,
+                        relativeDataPath = style.folderName,
+                    )
+                    addMagicBaseFrames(
+                        into = candidates,
+                        repo = style.packRepo,
+                        branch = style.packBranch,
+                        relativeDataPath = style.folderName,
+                        files = styleListing.imageFiles,
+                    )
 
-                // If active style folder delegates frames to a `depends on:` include/style package, check primary dependency
-                if (variants.isEmpty()) {
-                    val depCandidates = buildList {
-                        style.dependsOn.forEach { dep ->
-                            if (dep.endsWith(".mse-style") || dep.endsWith(".mse-include")) {
-                                add(dep)
-                            }
-                        }
-                        // Common Magic fallback include when `card_background()` is inherited
-                        if (style.gameId.equals("magic", ignoreCase = true)) {
+                    // Check `cards/` subfolder inside the active Magic style if present
+                    if (candidates.isEmpty() && styleListing.subDirs.any { it.equals("cards", ignoreCase = true) }) {
+                        val cardsPath = "${style.folderName}/cards"
+                        val cardsListing = fetchOrLoadFolderListing(
+                            repo = style.packRepo,
+                            branch = style.packBranch,
+                            relativeDataPath = cardsPath,
+                        )
+                        addMagicBaseFrames(
+                            into = candidates,
+                            repo = style.packRepo,
+                            branch = style.packBranch,
+                            relativeDataPath = cardsPath,
+                            files = cardsListing.imageFiles,
+                        )
+                    }
+
+                    // Delegate to `magic-m15-altered.mse-style`, `magic-modules.mse-include/cards`, and explicit `depends on:`
+                    if (candidates.isEmpty()) {
+                        val magicFallbackPaths = buildList {
+                            // Prefer known full-card M15 / modules folders
                             add("magic-m15-altered.mse-style")
+                            add("magic-modules.mse-include/cards")
+                            style.dependsOn.forEach { dep ->
+                                if (dep.endsWith(".mse-style") || dep.endsWith(".mse-include")) {
+                                    add(dep)
+                                    add("$dep/cards")
+                                }
+                            }
                             add("magic-new.mse-style")
-                        }
-                    }.distinct().take(2)
+                        }.distinct().take(4)
 
-                    for (depFolder in depCandidates) {
-                        val depRepo = findRepoForFolder(depFolder) ?: style.packRepo
-                        val depBranch = findBranchForRepo(depRepo)
-                        val depImages = fetchOrLoadFolderImages(
-                            repo = depRepo,
-                            branch = depBranch,
-                            folderName = depFolder,
+                        for (relPath in magicFallbackPaths) {
+                            val rootPkg = relPath.substringBefore('/')
+                            val depRepo = findRepoForFolder(rootPkg) ?: "Full-Magic-Pack"
+                            val depBranch = findBranchForRepo(depRepo)
+                            val listing = fetchOrLoadFolderListing(
+                                repo = depRepo,
+                                branch = depBranch,
+                                relativeDataPath = relPath,
+                            )
+                            addMagicBaseFrames(
+                                into = candidates,
+                                repo = depRepo,
+                                branch = depBranch,
+                                relativeDataPath = relPath,
+                                files = listing.imageFiles,
+                            )
+                            if (candidates.isNotEmpty()) break
+                        }
+                    }
+                } else {
+                    // Non-Magic styles: inspect style folder + immediate subfolders (cards/, frames/, bg/)
+                    val styleListing = fetchOrLoadFolderListing(
+                        repo = style.packRepo,
+                        branch = style.packBranch,
+                        relativeDataPath = style.folderName,
+                    )
+                    addNonMagicFolderFrames(
+                        into = candidates,
+                        repo = style.packRepo,
+                        branch = style.packBranch,
+                        relativeDataPath = style.folderName,
+                        files = styleListing.imageFiles,
+                    )
+
+                    val subFolderPriority = listOf("cards", "frames", "bg")
+                    val matchingSubDirs = subFolderPriority.filter { target ->
+                        styleListing.subDirs.any { it.equals(target, ignoreCase = true) }
+                    }
+                    for (sub in matchingSubDirs) {
+                        val actualName = styleListing.subDirs.first { it.equals(sub, ignoreCase = true) }
+                        val subPath = "${style.folderName}/$actualName"
+                        val subListing = fetchOrLoadFolderListing(
+                            repo = style.packRepo,
+                            branch = style.packBranch,
+                            relativeDataPath = subPath,
                         )
-                        addDiscoveredFolderFrames(
-                            into = variants,
-                            repo = depRepo,
-                            branch = depBranch,
-                            folderName = depFolder,
-                            gameId = style.gameId,
-                            files = depImages,
+                        addNonMagicFolderFrames(
+                            into = candidates,
+                            repo = style.packRepo,
+                            branch = style.packBranch,
+                            relativeDataPath = subPath,
+                            files = subListing.imageFiles,
                         )
-                        if (variants.isNotEmpty()) break
+                        if (candidates.size >= 8) break
+                    }
+
+                    // Also inspect primary `depends on:` `.mse-include`/`.mse-style` if still empty
+                    if (candidates.isEmpty()) {
+                        val depFolders = style.dependsOn
+                            .filter { it.endsWith(".mse-style") || it.endsWith(".mse-include") }
+                            .distinct()
+                            .take(2)
+                        for (depFolder in depFolders) {
+                            val depRepo = findRepoForFolder(depFolder) ?: style.packRepo
+                            val depBranch = findBranchForRepo(depRepo)
+                            val depListing = fetchOrLoadFolderListing(
+                                repo = depRepo,
+                                branch = depBranch,
+                                relativeDataPath = depFolder,
+                            )
+                            addNonMagicFolderFrames(
+                                into = candidates,
+                                repo = depRepo,
+                                branch = depBranch,
+                                relativeDataPath = depFolder,
+                                files = depListing.imageFiles,
+                            )
+                            if (candidates.isNotEmpty()) break
+                        }
                     }
                 }
             }
 
-            sortFrameVariants(variants.values.toList(), style.gameId)
+            if (candidates.isEmpty()) {
+                return@withContext emptyList()
+            }
+
+            // 3. MANDATORY PORTRAIT CARD BITMAP VALIDATION GATE:
+            // Verify every candidate's decoded dimensions satisfy:
+            // width >= 250 && height >= 350 && (height / width) in 1.25f..1.65f
+            val sortedCandidates = sortFrameVariants(candidates.values.toList(), style.gameId).take(12)
+            val validated = coroutineScope {
+                sortedCandidates.map { option ->
+                    async {
+                        val check = validatePortraitCardImage(option.imageUrl)
+                        if (check.valid) {
+                            option.copy(avgLuminance = check.avgLuminance)
+                        } else {
+                            null
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+
+            sortFrameVariants(validated, style.gameId)
         }
 
     private suspend fun fetchAndParseGame(pack: CatalogPackConfig, folderName: String): DiscoveredGame? {
@@ -503,21 +612,28 @@ class MseTemplateCatalogRepository(
         )
     }
 
-    private suspend fun fetchOrLoadFolderImages(
+    private data class FolderListing(
+        val imageFiles: List<String>,
+        val subDirs: List<String>,
+    )
+
+    private suspend fun fetchOrLoadFolderListing(
         repo: String,
         branch: String,
-        folderName: String,
-    ): List<String> {
-        val cacheKey = "$repo/$folderName"
+        relativeDataPath: String,
+    ): FolderListing {
+        val cacheKey = "v2:$repo/$relativeDataPath"
         diskCache.folderAssetCache[cacheKey]?.let { cached ->
-            if (cached.imageFiles.isNotEmpty()) {
-                return cached.imageFiles
+            val files = cached.imageFiles.filterNot { it.startsWith("dir:") }
+            val dirs = cached.imageFiles.filter { it.startsWith("dir:") }.map { it.removePrefix("dir:") }
+            if (files.isNotEmpty() || dirs.isNotEmpty()) {
+                return FolderListing(imageFiles = files, subDirs = dirs)
             }
         }
 
         val dirResult = fetchGitHubDirectory(
             repo = repo,
-            path = "data/$folderName",
+            path = "data/$relativeDataPath",
             previousEtag = diskCache.folderAssetCache[cacheKey]?.etag,
         )
 
@@ -527,83 +643,172 @@ class MseTemplateCatalogRepository(
                     .filter { it.type == "file" }
                     .map { it.name }
                     .filter { isImageFile(it) }
+                val subDirs = dirResult.items
+                    .filter { it.type == "dir" }
+                    .map { it.name }
+                val encodedCacheItems = images + subDirs.map { "dir:$it" }
                 val entry = FolderAssetCacheEntry(
                     repo = repo,
                     branch = branch,
-                    folderName = folderName,
+                    folderName = relativeDataPath,
                     etag = dirResult.etag,
-                    imageFiles = images,
+                    imageFiles = encodedCacheItems,
                 )
                 val updatedMap = diskCache.folderAssetCache.toMutableMap().apply {
                     put(cacheKey, entry)
                 }
                 persistDiskCache(diskCache.copy(folderAssetCache = updatedMap))
-                images
+                FolderListing(imageFiles = images, subDirs = subDirs)
             }
 
             is DirectoryFetchResult.NotModified -> {
-                diskCache.folderAssetCache[cacheKey]?.imageFiles.orEmpty()
+                val cached = diskCache.folderAssetCache[cacheKey]?.imageFiles.orEmpty()
+                FolderListing(
+                    imageFiles = cached.filterNot { it.startsWith("dir:") },
+                    subDirs = cached.filter { it.startsWith("dir:") }.map { it.removePrefix("dir:") },
+                )
             }
 
-            is DirectoryFetchResult.Error -> emptyList()
+            is DirectoryFetchResult.Error -> FolderListing(emptyList(), emptyList())
         }
     }
 
-    private fun addDiscoveredFolderFrames(
+    private suspend fun validatePortraitCardImage(url: String): FrameImageValidationEntry {
+        diskCache.frameValidationCache[url]?.let { cached ->
+            return cached
+        }
+
+        val result = rawFetchSemaphore.withPermit {
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", "TCG-Studio-Android")
+                .get()
+                .build()
+            runCatching {
+                okHttpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        return@use FrameImageValidationEntry(valid = false)
+                    }
+                    val bytes = resp.body?.bytes() ?: return@use FrameImageValidationEntry(valid = false)
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    val w = bounds.outWidth
+                    val h = bounds.outHeight
+                    if (!isValidPortraitCardDimensions(w, h)) {
+                        return@use FrameImageValidationEntry(valid = false, width = w, height = h)
+                    }
+                    val sampleOpts = BitmapFactory.Options().apply { inSampleSize = 8 }
+                    val thumb = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, sampleOpts)
+                    val avgLum = thumb?.let { bmp ->
+                        val lum = computeBitmapAverageLuminance(bmp)
+                        bmp.recycle()
+                        lum
+                    } ?: 0.70f
+                    FrameImageValidationEntry(
+                        valid = true,
+                        width = w,
+                        height = h,
+                        avgLuminance = avgLum,
+                    )
+                }
+            }.getOrDefault(FrameImageValidationEntry(valid = false))
+        }
+
+        val updatedMap = diskCache.frameValidationCache.toMutableMap().apply {
+            put(url, result)
+        }
+        persistDiskCache(diskCache.copy(frameValidationCache = updatedMap))
+        return result
+    }
+
+    private fun computeBitmapAverageLuminance(bitmap: android.graphics.Bitmap): Float {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) return 0.70f
+        var sum = 0.0
+        var count = 0
+        val stepX = (w / 10).coerceAtLeast(1)
+        val stepY = (h / 14).coerceAtLeast(1)
+        var y = (h * 0.08f).toInt().coerceIn(0, h - 1)
+        val maxY = (h * 0.92f).toInt().coerceIn(1, h)
+        while (y < maxY) {
+            var x = (w * 0.12f).toInt().coerceIn(0, w - 1)
+            val maxX = (w * 0.88f).toInt().coerceIn(1, w)
+            while (x < maxX) {
+                val pixel = bitmap.getPixel(x, y)
+                val alpha = AndroidColor.alpha(pixel)
+                if (alpha >= 128) {
+                    val r = AndroidColor.red(pixel) / 255.0
+                    val g = AndroidColor.green(pixel) / 255.0
+                    val b = AndroidColor.blue(pixel) / 255.0
+                    sum += 0.2126 * r + 0.7152 * g + 0.0722 * b
+                    count++
+                }
+                x += stepX
+            }
+            y += stepY
+        }
+        return if (count > 0) (sum / count).toFloat().coerceIn(0f, 1f) else 0.70f
+    }
+
+    private fun addMagicBaseFrames(
         into: LinkedHashMap<String, FrameVariantOption>,
         repo: String,
         branch: String,
-        folderName: String,
-        gameId: String,
+        relativeDataPath: String,
         files: List<String>,
     ) {
-        val candidates = files.filter { !isExcludedFrameFilename(it) }
+        val candidates = files.filterNot { MseStyleParser.isBlacklistedNonCardAsset(it) }
         if (candidates.isEmpty()) return
 
-        if (gameId.equals("magic", ignoreCase = true)) {
-            val magicMap = listOf(
-                Triple("colorless", "Colorless", listOf("ccard.jpg", "ccard.png", "c.png", "colorless.png", "colorless.jpg")),
-                Triple("white", "W", listOf("wcard.jpg", "wcard.png", "w.png", "white.png", "white.jpg")),
-                Triple("blue", "U", listOf("ucard.jpg", "ucard.png", "u.png", "blue.png", "blue.jpg")),
-                Triple("black", "B", listOf("bcard.jpg", "bcard.png", "b.png", "black.png", "black.jpg")),
-                Triple("red", "R", listOf("rcard.jpg", "rcard.png", "r.png", "red.png", "red.jpg")),
-                Triple("green", "G", listOf("gcard.jpg", "gcard.png", "g.png", "green.png", "green.jpg")),
-                Triple("multicolor", "Gold", listOf("mcard.jpg", "mcard.png", "m.png", "gold.png", "gold.jpg", "multi.png")),
-                Triple("artifact", "Artifact", listOf("acard.jpg", "acard.png", "a.png", "artifact.png", "artifact.jpg")),
-                Triple("land", "Land", listOf("lcard.jpg", "lcard.png", "l.png", "land.png", "land.jpg")),
-            )
-            for ((key, label, patterns) in magicMap) {
-                val matched = candidates.firstOrNull { file ->
-                    val low = file.lowercase()
-                    patterns.any { low == it } ||
-                        (low.endsWith("card.jpg") && low.startsWith(patterns.first().take(1))) ||
-                        (low.endsWith("card.png") && low.startsWith(patterns.first().take(1)))
-                }
-                if (matched != null && !into.containsKey(key)) {
-                    into[key] = FrameVariantOption(
-                        key = key,
-                        label = label,
-                        imageUrl = MseTemplateCatalog.buildRawDataUrl(repo, branch, folderName, matched),
-                        swatchColorHex = inferSwatchHex(key),
-                    )
-                }
+        val magicMap = listOf(
+            Triple("colorless", "Colorless", listOf("ccard.jpg", "ccard.png", "colorless.jpg", "colorless.png", "card_c.jpg", "card_c.png")),
+            Triple("white", "White", listOf("wcard.jpg", "wcard.png", "white.jpg", "white.png", "card_w.jpg", "card_w.png")),
+            Triple("blue", "Blue", listOf("ucard.jpg", "ucard.png", "blue.jpg", "blue.png", "card_u.jpg", "card_u.png")),
+            Triple("black", "Black", listOf("bcard.jpg", "bcard.png", "black.jpg", "black.png", "card_b.jpg", "card_b.png")),
+            Triple("red", "Red", listOf("rcard.jpg", "rcard.png", "red.jpg", "red.png", "card_r.jpg", "card_r.png")),
+            Triple("green", "Green", listOf("gcard.jpg", "gcard.png", "green.jpg", "green.png", "card_g.jpg", "card_g.png")),
+            Triple("multicolor", "Gold", listOf("mcard.jpg", "mcard.png", "gold.jpg", "gold.png", "multi.jpg", "multi.png", "card_m.jpg", "card_m.png")),
+            Triple("artifact", "Artifact", listOf("acard.jpg", "acard.png", "artifact.jpg", "artifact.png", "card_a.jpg", "card_a.png")),
+            Triple("land", "Land", listOf("lcard.jpg", "lcard.png", "land.jpg", "land.png", "card_l.jpg", "card_l.png")),
+        )
+        for ((key, label, patterns) in magicMap) {
+            val matched = candidates.firstOrNull { file ->
+                val low = file.lowercase()
+                patterns.any { low == it }
+            }
+            if (matched != null && !into.containsKey(key)) {
+                into[key] = FrameVariantOption(
+                    key = key,
+                    label = label,
+                    imageUrl = MseTemplateCatalog.buildRawDataUrl(repo, branch, relativeDataPath, matched),
+                    swatchColorHex = inferSwatchHex(key),
+                )
             }
         }
+    }
 
-        // Generic frame discovery for Non-Magic games (or Magic styles with custom filenames like card.png / frame.png)
-        if (into.isEmpty()) {
-            val prioritized = candidates.sortedByDescending { scoreFrameCandidate(it) }.take(12)
-            prioritized.forEach { file ->
-                val baseName = file.substringBeforeLast('.')
-                val key = baseName.lowercase().replace(Regex("[^a-z0-9]+"), "_")
-                if (!into.containsKey(key)) {
-                    into[key] = FrameVariantOption(
-                        key = key,
-                        label = prettifyVariantLabel(baseName),
-                        imageUrl = MseTemplateCatalog.buildRawDataUrl(repo, branch, folderName, file),
-                        swatchColorHex = inferSwatchHex(baseName),
-                    )
-                }
+    private fun addNonMagicFolderFrames(
+        into: LinkedHashMap<String, FrameVariantOption>,
+        repo: String,
+        branch: String,
+        relativeDataPath: String,
+        files: List<String>,
+    ) {
+        val candidates = files.filterNot { MseStyleParser.isBlacklistedNonCardAsset(it) }
+        if (candidates.isEmpty()) return
+
+        val prioritized = candidates.sortedByDescending { scoreFrameCandidate(it) }.take(12)
+        prioritized.forEach { file ->
+            val baseName = file.substringBeforeLast('.')
+            val key = baseName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+            if (key.isNotEmpty() && !into.containsKey(key)) {
+                into[key] = FrameVariantOption(
+                    key = key,
+                    label = prettifyVariantLabel(baseName),
+                    imageUrl = MseTemplateCatalog.buildRawDataUrl(repo, branch, relativeDataPath, file),
+                    swatchColorHex = inferSwatchHex(baseName),
+                )
             }
         }
     }
@@ -809,28 +1014,6 @@ class MseTemplateCatalogRepository(
         return low.endsWith(".png") || low.endsWith(".jpg") || low.endsWith(".jpeg") || low.endsWith(".webp")
     }
 
-    private fun isExcludedFrameFilename(name: String): Boolean {
-        val low = name.lowercase()
-        return low.contains("mask") ||
-            low.contains("symbol") ||
-            low.contains("icon") ||
-            low.contains("card-sample") ||
-            low.contains("sample") ||
-            low.contains("pt") && !low.contains("empty") && !low.contains("script") ||
-            low.contains("crown") ||
-            low.contains("watermark") ||
-            low.contains("mana") ||
-            low.contains("rarity") ||
-            low.contains("stamp") ||
-            low.contains("holofoil") ||
-            low.contains("shadow") ||
-            low.contains("glow") ||
-            low.contains("pip") ||
-            low.contains("arrow") ||
-            low.contains("logo") ||
-            low.contains("back") && !low.contains("background")
-    }
-
     private fun scoreFrameCandidate(fileName: String): Int {
         val low = fileName.lowercase()
         var score = 0
@@ -838,9 +1021,26 @@ class MseTemplateCatalogRepository(
         if (low.contains("frame")) score += 45
         if (low.contains("bg") || low.contains("background")) score += 40
         if (low.contains("base") || low.contains("blank")) score += 35
-        if (low.endsWith(".png")) score += 10
-        if (low.endsWith(".jpg") || low.endsWith(".jpeg")) score += 8
+        if (low.endsWith(".jpg") || low.endsWith(".jpeg")) score += 12
+        if (low.endsWith(".png")) score += 8
         return score
+    }
+
+    private fun normalizeVariantKey(raw: String, isMagic: Boolean): String {
+        val low = raw.trim().lowercase()
+        if (!isMagic) return low.replace(Regex("[^a-z0-9]+"), "_").trim('_').ifEmpty { "default" }
+        return when (low) {
+            "w", "white" -> "white"
+            "u", "blue" -> "blue"
+            "b", "black" -> "black"
+            "r", "red" -> "red"
+            "g", "green" -> "green"
+            "c", "colorless" -> "colorless"
+            "m", "multi", "multicolor", "gold" -> "multicolor"
+            "a", "artifact" -> "artifact"
+            "l", "land" -> "land"
+            else -> low.replace(Regex("[^a-z0-9]+"), "_").trim('_').ifEmpty { "default" }
+        }
     }
 
     private fun sortFrameVariants(
@@ -862,11 +1062,11 @@ class MseTemplateCatalogRepository(
             .replace('-', ' ')
             .trim()
         return when (clean.lowercase()) {
-            "w", "white" -> "W"
-            "u", "blue" -> "U"
-            "b", "black" -> "B"
-            "r", "red" -> "R"
-            "g", "green" -> "G"
+            "w", "white" -> "White"
+            "u", "blue" -> "Blue"
+            "b", "black" -> "Black"
+            "r", "red" -> "Red"
+            "g", "green" -> "Green"
             "c", "colorless" -> "Colorless"
             "m", "multi", "multicolor", "gold" -> "Gold"
             "a", "artifact" -> "Artifact"
@@ -906,5 +1106,19 @@ class MseTemplateCatalogRepository(
         data class Success(val items: List<GitHubContentItemDto>, val etag: String?) : DirectoryFetchResult()
         data object NotModified : DirectoryFetchResult()
         data class Error(val message: String) : DirectoryFetchResult()
+    }
+
+    companion object {
+        /**
+         * Mandatory Portrait Card Bitmap Validation Gate:
+         * Accepts ONLY real portrait TCG card base frames (`width >= 250`, `height >= 350`,
+         * portrait aspect ratio `height / width in 1.25f..1.65f`).
+         * Automatically rejects tiny icons, square badges, and horizontal strips.
+         */
+        fun isValidPortraitCardDimensions(width: Int, height: Int): Boolean {
+            if (width < 250 || height < 350) return false
+            val ratio = height.toFloat() / width.toFloat()
+            return ratio in 1.25f..1.65f
+        }
     }
 }

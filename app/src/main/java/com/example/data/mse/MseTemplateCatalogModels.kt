@@ -73,6 +73,7 @@ data class MseHitboxRecord(
     @Json(name = "font_size") val fontSize: Float? = null,
     @Json(name = "font_color_hex") val fontColorHex: String? = null,
     @Json(name = "alignment") val alignment: String? = null,
+    @Json(name = "is_hidden_or_conditional") val isHiddenOrConditional: Boolean = false,
 ) {
     fun toDomain(): MseHitbox = MseHitbox(
         field = field,
@@ -85,6 +86,7 @@ data class MseHitboxRecord(
         fontSize = fontSize,
         fontColorHex = fontColorHex,
         alignment = alignment,
+        isHiddenOrConditional = isHiddenOrConditional,
     )
 
     companion object {
@@ -99,6 +101,7 @@ data class MseHitboxRecord(
             fontSize = h.fontSize,
             fontColorHex = h.fontColorHex,
             alignment = h.alignment,
+            isHiddenOrConditional = h.isHiddenOrConditional,
         )
     }
 }
@@ -207,14 +210,23 @@ data class FolderAssetCacheEntry(
 )
 
 @JsonClass(generateAdapter = true)
+data class FrameImageValidationEntry(
+    @Json(name = "valid") val valid: Boolean,
+    @Json(name = "width") val width: Int = 0,
+    @Json(name = "height") val height: Int = 0,
+    @Json(name = "avg_luminance") val avgLuminance: Float = 0.72f,
+)
+
+@JsonClass(generateAdapter = true)
 data class CatalogDiskCache(
-    @Json(name = "version") val version: Int = 1,
+    @Json(name = "version") val version: Int = 2,
     @Json(name = "games") val games: List<DiscoveredGame> = emptyList(),
     @Json(name = "styles") val styles: List<DiscoveredStyle> = emptyList(),
     @Json(name = "includes") val includes: List<DiscoveredInclude> = emptyList(),
     @Json(name = "pack_fonts") val packFonts: List<DiscoveredPackFont> = emptyList(),
     @Json(name = "repo_etags") val repoEtags: Map<String, String> = emptyMap(),
     @Json(name = "folder_asset_cache") val folderAssetCache: Map<String, FolderAssetCacheEntry> = emptyMap(),
+    @Json(name = "frame_validation_cache") val frameValidationCache: Map<String, FrameImageValidationEntry> = emptyMap(),
     @Json(name = "last_synced_epoch_ms") val lastSyncedEpochMs: Long = 0L,
     @Json(name = "beta_enabled") val betaEnabled: Boolean = false,
     @Json(name = "outdated_enabled") val outdatedEnabled: Boolean = false,
@@ -237,7 +249,10 @@ data class FrameVariantOption(
     val label: String,
     val imageUrl: String,
     val swatchColorHex: Long? = null,
-)
+    val avgLuminance: Float = 0.72f,
+) {
+    val isDarkFrame: Boolean get() = avgLuminance < 0.44f
+}
 
 data class ResolvedOfflineFrame(
     val styleKey: String,

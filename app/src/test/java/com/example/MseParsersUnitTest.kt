@@ -284,4 +284,139 @@ class MseParsersUnitTest {
         assertEquals(0, com.example.ui.workspace.parseManaValue(""))
         assertEquals(2, com.example.ui.workspace.parseManaValue("WW"))
     }
+
+    @Test
+    fun blacklistRejectsTinyOverlayIconsAndAllowsRealBaseCardFrames() {
+        val rejected = listOf(
+            "20slice.png",
+            "flashdot.png",
+            "loyalty.png",
+            "loyaltydown.png",
+            "loyaltynaught.png",
+            "pt_box.png",
+            "holo_stamp.png",
+            "nyx_crown.png",
+            "watermark_guild.png",
+            "card-sample.png",
+            "card-back.png",
+            "snow_overlay.png",
+        )
+        for (name in rejected) {
+            assertTrue(
+                "Expected non-card overlay '$name' to be blacklisted",
+                MseStyleParser.isBlacklistedNonCardAsset(name),
+            )
+        }
+
+        val allowed = listOf(
+            "ccard.jpg",
+            "wcard.jpg",
+            "ucard.jpg",
+            "bcard.jpg",
+            "rcard.jpg",
+            "gcard.jpg",
+            "mcard.jpg",
+            "acard.jpg",
+            "lcard.jpg",
+            "frames/monster_normal.png",
+            "bg/background_gold.png",
+        )
+        for (name in allowed) {
+            assertTrue(
+                "Expected real base frame '$name' to NOT be blacklisted",
+                !MseStyleParser.isBlacklistedNonCardAsset(name),
+            )
+        }
+    }
+
+    @Test
+    fun portraitCardDimensionGateRejectsIconsAndAcceptsFullCardFrames() {
+        // Real MSE card sizes
+        assertTrue(com.example.data.mse.MseTemplateCatalogRepository.isValidPortraitCardDimensions(375, 523))
+        assertTrue(com.example.data.mse.MseTemplateCatalogRepository.isValidPortraitCardDimensions(744, 1039))
+        assertTrue(com.example.data.mse.MseTemplateCatalogRepository.isValidPortraitCardDimensions(421, 614))
+
+        // Tiny icons / square overlays / wide banners must fail
+        assertTrue(!com.example.data.mse.MseTemplateCatalogRepository.isValidPortraitCardDimensions(20, 20))
+        assertTrue(!com.example.data.mse.MseTemplateCatalogRepository.isValidPortraitCardDimensions(120, 120))
+        assertTrue(!com.example.data.mse.MseTemplateCatalogRepository.isValidPortraitCardDimensions(375, 375))
+        assertTrue(!com.example.data.mse.MseTemplateCatalogRepository.isValidPortraitCardDimensions(523, 375))
+        assertTrue(!com.example.data.mse.MseTemplateCatalogRepository.isValidPortraitCardDimensions(200, 300))
+    }
+
+    @Test
+    fun styleParserMarksHiddenFieldsAndOverlayFilterExcludesAliasBorderColorAndLoyalty() {
+        val styleText = """
+            mse version: 2.0.0
+            game: magic
+            card width: 375
+            card height: 523
+            card dpi: 150
+            card style:
+            	name:
+            		left: 30
+            		top: 26
+            		width: 315
+            		height: 28
+            		z index: 2
+            	alias:
+            		left: 30
+            		top: 56
+            		width: 315
+            		height: 20
+            		visible: { card.alias != "" }
+            	border color:
+            		left: 0
+            		top: 0
+            		width: 375
+            		height: 523
+            		visible: false
+            	card color 2:
+            		left: 0
+            		top: 0
+            		width: 375
+            		height: 523
+            	loyalty:
+            		left: 310
+            		top: 460
+            		width: 40
+            		height: 30
+            	image:
+            		left: 29
+            		top: 60
+            		width: 316
+            		height: 231
+            	type:
+            		left: 32
+            		top: 296
+            		width: 311
+            		height: 28
+            	rule text:
+            		left: 29
+            		top: 327
+            		width: 317
+            		height: 154
+        """.trimIndent()
+
+        val spec = MseStyleParser.parseStyleText(styleText, "magic-m15-mainframe.mse-style")
+        val aliasBox = spec.hitboxes.first { it.field == "alias" }
+        val borderBox = spec.hitboxes.first { it.field == "border color" }
+        val nameBox = spec.hitboxes.first { it.field == "name" }
+
+        assertTrue("Scripted visible: expression must mark field hidden/conditional", aliasBox.isHiddenOrConditional)
+        assertTrue("visible: false must mark field hidden/conditional", borderBox.isHiddenOrConditional)
+        assertTrue("Core visible field 'name' must remain visible", !nameBox.isHiddenOrConditional)
+
+        val visibleOverlays = com.example.ui.workspace.prepareOverlayTextHitboxes(spec.hitboxes, "magic")
+        val visibleNames = visibleOverlays.map { it.field }.toSet()
+        assertTrue(visibleNames.contains("name"))
+        assertTrue(visibleNames.contains("type"))
+        assertTrue(visibleNames.contains("rule text"))
+        assertTrue(!visibleNames.contains("alias"))
+        assertTrue(!visibleNames.contains("border color"))
+        assertTrue(!visibleNames.contains("card color 2"))
+        assertTrue(!visibleNames.contains("loyalty"))
+        assertTrue(!visibleNames.contains("image"))
+    }
 }
+

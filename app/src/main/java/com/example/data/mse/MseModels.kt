@@ -479,6 +479,7 @@ data class MseHitbox(
     val fontSize: Float? = null,
     val fontColorHex: String? = null,
     val alignment: String? = null,
+    val isHiddenOrConditional: Boolean = false,
 )
 
 data class ParsedMseGameMetadata(
@@ -512,7 +513,8 @@ data class MseStyleSpec(
 ) {
     val artHitbox: MseHitbox?
         get() = hitboxes.firstOrNull {
-            it.field == "image" || it.field == "art" || it.field == "image 1" || it.field == "card image"
+            !it.isHiddenOrConditional &&
+                (it.field == "image" || it.field == "art" || it.field == "image 1" || it.field == "card image")
         }
 
     val artAspectRatio: Float
@@ -533,10 +535,16 @@ data class MseStyleSpec(
         if (cardWidthPx <= 0 || cardHeightPx <= 0) return false
         val usable = hitboxes.filter { box ->
             val key = box.field.lowercase()
-            key != "border" &&
+            !box.isHiddenOrConditional &&
+                key != "border" &&
+                key != "border color" &&
                 key != "card color" &&
+                key != "card color 2" &&
+                key != "card color 3" &&
                 key != "background" &&
                 key != "frame" &&
+                key != "alias" &&
+                !key.startsWith("loyalty") &&
                 box.width >= 10f &&
                 box.height >= 8f &&
                 box.left >= -20f &&
