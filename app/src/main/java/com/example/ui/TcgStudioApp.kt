@@ -35,10 +35,13 @@ import androidx.navigation.compose.rememberNavController
 import com.example.ui.diagnostics.BridgeDiagnosticsScreen
 import com.example.ui.diagnostics.BridgeDiagnosticsSheet
 import com.example.ui.fonts.FontsScreen
+import com.example.ui.nexus.NexusHubSyncScreen
+import com.example.ui.nexus.NexusHubViewModel
 import com.example.ui.theme.TcgStudioTheme
 import com.example.ui.upstream.UpstreamScreen
 import com.example.ui.welcome.WelcomeScreen
 import com.example.ui.workspace.SetWorkspaceScreen
+import kotlinx.coroutines.launch
 
 object StudioRoutes {
     const val WELCOME = "mse_welcome"
@@ -46,6 +49,7 @@ object StudioRoutes {
     const val FONTS = "mse_fonts"
     const val UPSTREAM = "mse_upstream"
     const val BRIDGE = "mse_bridge"
+    const val NEXUS_HUB = "mse_nexus_hub"
 }
 
 /**
@@ -53,7 +57,12 @@ object StudioRoutes {
  * Launches directly into the MSE Welcome Window.
  */
 @Composable
-fun TcgStudioApp(viewModel: StudioViewModel) {
+fun TcgStudioApp(
+    viewModel: StudioViewModel,
+    nexusHubViewModel: NexusHubViewModel,
+    pendingHubSyncHandshake: Boolean = false,
+    onHubSyncHandshakeConsumed: () -> Unit = {},
+) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val archive by viewModel.archive.collectAsStateWithLifecycle()
     val activeCardIndex by viewModel.activeCardIndex.collectAsStateWithLifecycle()
@@ -77,14 +86,31 @@ fun TcgStudioApp(viewModel: StudioViewModel) {
     val isFontBusy by viewModel.isFontBusy.collectAsStateWithLifecycle()
     val templateValidation by viewModel.templateValidation.collectAsStateWithLifecycle()
     val isValidatingTemplate by viewModel.isValidatingTemplate.collectAsStateWithLifecycle()
+    val nexusHubState by nexusHubViewModel.uiState.collectAsStateWithLifecycle()
 
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
+    val uiScope = androidx.compose.runtime.rememberCoroutineScope()
     var showBridgeSheet by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        viewModel.messages.collect { message ->
-            snackbarHostState.showSnackbar(message)
+        launch {
+            viewModel.messages.collect { message ->
+                snackbarHostState.showSnackbar(message)
+            }
+        }
+        launch {
+            nexusHubViewModel.messages.collect { message ->
+                snackbarHostState.showSnackbar(message)
+            }
+        }
+    }
+
+    LaunchedEffect(pendingHubSyncHandshake) {
+        if (pendingHubSyncHandshake) {
+            navController.navigate(StudioRoutes.NEXUS_HUB) {
+                launchSingleTop = true
+            }
         }
     }
 
@@ -133,6 +159,8 @@ fun TcgStudioApp(viewModel: StudioViewModel) {
                         onOpenFontsManager = { navController.navigate(StudioRoutes.FONTS) },
                         onOpenUpstreamManager = { navController.navigate(StudioRoutes.UPSTREAM) },
                         onOpenBridgeSetup = { navController.navigate(StudioRoutes.BRIDGE) },
+                        nexusLinkStatus = nexusHubState.linkStatus,
+                        onOpenNexusHub = { navController.navigate(StudioRoutes.NEXUS_HUB) },
                     )
                 }
 
@@ -182,6 +210,7 @@ fun TcgStudioApp(viewModel: StudioViewModel) {
                             onOpenBridgeSheet = { showBridgeSheet = true },
                             onOpenUpstreamSplits = { navController.navigate(StudioRoutes.UPSTREAM) },
                             onOpenBridgeSettings = { navController.navigate(StudioRoutes.BRIDGE) },
+                            onOpenNexusHub = { navController.navigate(StudioRoutes.NEXUS_HUB) },
                             onSelectCard = viewModel::selectCard,
                             onAddBlankCard = viewModel::addBlankCard,
                             onDuplicateCard = viewModel::duplicateCard,
@@ -263,6 +292,40 @@ fun TcgStudioApp(viewModel: StudioViewModel) {
                             onUpdateEngineSplit = viewModel::updateEngineSplit,
                             onToggleDarkTheme = viewModel::toggleDarkTheme,
                             onValidateTemplate = viewModel::validateTemplateOnBridge,
+                        )
+                    }
+                }
+
+                composable(StudioRoutes.NEXUS_HUB) {
+                    val activeCard = archive?.document?.cards?.getOrNull(activeCardIndex)
+                    ToolScreenScaffold(
+                        title = "Nexus Master Hub Sync",
+                        onBack = { navController.popBackStack() },
+                    ) {
+                        NexusHubSyncScreen(
+                            uiState = nexusHubState,
+                            autoTriggerSync = pendingHubSyncHandshake,
+                            activeMseCardName = activeCard?.name,
+                            activeMseCardType = activeCard?.fullTypeLine,
+                            activeMseCardRules = activeCard?.ruleText,
+                            onAutoSyncConsumed = onHubSyncHandshakeConsumed,
+                            onSaveManifest = nexusHubViewModel::updateManifest,
+                            onVerifyAndPullHub = nexusHubViewModel::verifyMutualLinkAndCheckHub,
+                            onApplyPendingDiff = nexusHubViewModel::applyPendingHubIndexUpdate,
+                            onDismissPendingDiff = nexusHubViewModel::dismissPendingHubDiff,
+                            onSelectClient = nexusHubViewModel::selectClient,
+                            onRedirectLockedToFork = nexusHubViewModel::redirectFromLockedClientToFork,
+                            onUpdatePat = nexusHubViewModel::updatePat,
+                            onCommitPackToHub = nexusHubViewModel::commitCardPackToLinkedHub,
+                            onCommitManifestToThisRepo = nexusHubViewModel::commitRepoLinkManifestToThisRepo,
+                            onBuildPackJson = nexusHubViewModel::buildCurrentExportPackJson,
+                            onBuildManifestJson = nexusHubViewModel::buildManifestJson,
+                            onBuildWorkflowYaml = nexusHubViewModel::buildWorkflowYaml,
+                            onWriteFileToUri = nexusHubViewModel::writeUtf8ToUri,
+                            viewModel = nexusHubViewModel,
+                            onNotify = { msg ->
+                                uiScope.launch { snackbarHostState.showSnackbar(msg) }
+                            },
                         )
                     }
                 }

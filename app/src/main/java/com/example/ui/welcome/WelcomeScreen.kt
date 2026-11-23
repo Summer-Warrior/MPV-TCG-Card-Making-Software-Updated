@@ -53,6 +53,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.filled.Hub
 import com.example.R
 import com.example.data.mse.CatalogPackFilter
 import com.example.data.mse.CatalogSyncState
@@ -60,6 +61,7 @@ import com.example.data.mse.DiscoveredGame
 import com.example.data.mse.DiscoveredStyle
 import com.example.data.mse.MseTemplateCatalog
 import com.example.data.mse.RecentSetRecord
+import com.example.domain.nexus.MutualLinkStatus
 import com.example.ui.BridgeHealthState
 import com.example.ui.components.BridgeStatusPill
 
@@ -84,6 +86,8 @@ fun WelcomeScreen(
     onOpenFontsManager: () -> Unit,
     onOpenUpstreamManager: () -> Unit,
     onOpenBridgeSetup: () -> Unit,
+    nexusLinkStatus: MutualLinkStatus = MutualLinkStatus.UNLINKED,
+    onOpenNexusHub: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var showNewSetWizard by remember { mutableStateOf(false) }
@@ -303,6 +307,18 @@ fun WelcomeScreen(
                         .testTag("welcome_tool_bridge"),
                 )
             }
+        }
+
+        // ---- Nexus Master Hub Bidirectional Sync Card ----
+        item {
+            WelcomeActionCard(
+                icon = Icons.Default.Hub,
+                title = stringResource(R.string.nexus_hub_title),
+                subtitle = "${nexusLinkStatus.displayLabel} • ${stringResource(R.string.nexus_hub_desc)}",
+                emphasized = false,
+                onClick = onOpenNexusHub,
+                modifier = Modifier.testTag("welcome_tool_nexus_hub"),
+            )
         }
 
         // ---- Recent Sets Section (Strictly Real User Sets Only) ----

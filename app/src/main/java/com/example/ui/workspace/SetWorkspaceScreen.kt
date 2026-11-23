@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SaveAs
@@ -128,6 +129,7 @@ fun SetWorkspaceScreen(
     onOpenBridgeSheet: () -> Unit,
     onOpenUpstreamSplits: () -> Unit,
     onOpenBridgeSettings: () -> Unit,
+    onOpenNexusHub: () -> Unit = {},
     onSelectCard: (Int) -> Unit,
     onAddBlankCard: () -> Unit,
     onDuplicateCard: (Int) -> Unit,
@@ -379,6 +381,14 @@ fun SetWorkspaceScreen(
                             onClick = {
                                 showOverflowMenu = false
                                 onOpenBridgeSettings()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Nexus Hub Sync & Coder") },
+                            leadingIcon = { Icon(Icons.Default.Hub, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                onOpenNexusHub()
                             },
                         )
                     }

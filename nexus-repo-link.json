@@ -1,0 +1,9 @@
+{
+  "thisRepo": "Summer-Warrior/MPV-TCG-Card-Making-Software-Updated",
+  "thisBranch": "main",
+  "linkedHubRepo": "Summer-Warrior/Nexus-Master-Hub",
+  "linkedHubBranch": "main",
+  "bridgeSchemaVersion": "1.0.0",
+  "hubIndexPath": "nexus-bridge/client-codestring-index.json",
+  "exportedPacksDir": "nexus-bridge/card-packs/"
+}

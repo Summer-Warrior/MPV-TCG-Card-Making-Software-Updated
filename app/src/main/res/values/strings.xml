@@ -60,4 +60,9 @@
     <string name="add_connector">Add Connector</string>
     <string name="pin_sha">Pin</string>
     <string name="rollback_sha">Rollback</string>
+
+    <!-- Nexus Master Hub Sync Bridge -->
+    <string name="tool_nexus_hub">Nexus Hub Sync</string>
+    <string name="nexus_hub_title">Nexus Master Hub Bridge</string>
+    <string name="nexus_hub_desc">Bidirectional GitHub sync, non-locked client firewall &amp; 21-digit card coder</string>
 </resources>

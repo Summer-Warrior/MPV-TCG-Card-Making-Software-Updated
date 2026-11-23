@@ -5,6 +5,8 @@ import com.example.data.bridge.MseBridgeClient
 import com.example.data.fonts.FontCatalogRepository
 import com.example.data.mse.MseTemplateCatalogRepository
 import com.example.data.mse.MseWorkspaceRepository
+import com.example.data.nexus.NexusHubBridgeService
+import com.example.data.nexus.NexusHubRepository
 import com.example.data.settings.SettingsRepository
 import com.example.data.upstream.GitHubUpdateWatcher
 import com.example.data.upstream.UpstreamManifestRepository
@@ -28,6 +30,7 @@ class AppContainer(context: Context) {
         .addInterceptor(
             HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BASIC
+                redactHeader("Authorization")
             }
         )
         .build()
@@ -66,6 +69,16 @@ class AppContainer(context: Context) {
 
     val gitHubUpdateWatcher = GitHubUpdateWatcher(
         okHttpClient = okHttpClient,
+        moshi = moshi,
+    )
+
+    val nexusHubBridgeService = NexusHubBridgeService(
+        githubOkHttpClient = okHttpClient,
+        moshi = moshi,
+    )
+
+    val nexusHubRepository = NexusHubRepository(
+        context = appContext,
         moshi = moshi,
     )
 }
