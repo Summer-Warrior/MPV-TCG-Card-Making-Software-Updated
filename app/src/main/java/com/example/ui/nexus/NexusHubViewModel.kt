@@ -45,6 +45,7 @@ data class NexusHubUiState(
     val manifest: NexusRepoLinkManifest = NexusRepoLinkManifest(),
     val appliedIndex: NexusClientCodestringIndex = NexusHubRepository.buildSeedClientIndex(),
     val linkStatus: MutualLinkStatus = MutualLinkStatus.UNLINKED,
+    val hasCheckedHubLink: Boolean = false,
     val lastHandshake: HubHandshakeResult? = null,
     val pendingPulledIndex: NexusClientCodestringIndex? = null,
     val pendingDiff: NexusHubChangelogDiff? = null,
@@ -111,6 +112,8 @@ class NexusHubViewModel(
                 )
             }
             recomputeValidation()
+            // Automatically run ETag-cached mutual link check on app open (offline-safe)
+            verifyMutualLinkAndCheckHub(silent = true)
         }
     }
 
@@ -136,26 +139,33 @@ class NexusHubViewModel(
         }
     }
 
-    fun verifyMutualLinkAndCheckHub() {
+    fun verifyMutualLinkAndCheckHub(silent: Boolean = false) {
         val current = _uiState.value
         if (current.isCheckingHub) return
         viewModelScope.launch {
             _uiState.update { it.copy(isCheckingHub = true) }
+            val (cachedEtags, cachedBodies) = repository.loadHubEtagCache()
             val result = bridgeService.verifyMutualLinkAndPullIndex(
                 localManifest = current.manifest,
                 currentAppliedIndex = current.appliedIndex,
                 fineGrainedPat = current.fineGrainedPat.ifBlank { null },
+                cachedEtags = cachedEtags,
+                cachedBodies = cachedBodies,
             )
+            repository.saveHubEtagCache(result.updatedEtags, result.updatedBodies)
             _uiState.update { state ->
                 state.copy(
                     isCheckingHub = false,
+                    hasCheckedHubLink = true,
                     linkStatus = result.status,
                     lastHandshake = result,
                     pendingPulledIndex = result.pulledIndex?.takeIf { result.changelogDiff?.hasChanges == true },
                     pendingDiff = result.changelogDiff?.takeIf { it.hasChanges },
                 )
             }
-            _messages.tryEmit("Hub Link Status: ${result.status.wireValue}")
+            if (!silent) {
+                _messages.tryEmit("Hub Link Status: ${result.status.wireValue}")
+            }
         }
     }
 

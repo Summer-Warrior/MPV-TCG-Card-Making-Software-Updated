@@ -282,17 +282,17 @@
     </section>
   </main>
 
-  <!-- High-Priority Admin-Only Blocking Breaking-Change Alert Modal -->
+  <!-- Alignment & Compatibility Warning Modal (Inspection visible to all; Admin actions gated) -->
   <div id="admin-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
     <div class="modal">
-      <h2 id="admin-modal-title">Admin Alert: Engine Compatibility Break Detected</h2>
+      <h2 id="admin-modal-title">Cross-Repo Alignment Warning</h2>
       <p id="admin-modal-body" class="muted"></p>
       <pre id="admin-modal-details"></pre>
       <div class="btn-row">
-        <button id="btn-pause-sync" class="danger" type="button">Pause Sync</button>
         <button id="btn-export-diag" class="primary" type="button">Export Diagnostic Report</button>
-        <button id="btn-fire-discord" type="button">Send Discord Admin Alert</button>
-        <button id="btn-close-modal" type="button">Dismiss</button>
+        <button id="btn-pause-sync" class="danger" type="button" style="display:none;">Pause Sync (Admin)</button>
+        <button id="btn-fire-discord" type="button" style="display:none;">Send Discord Admin Alert</button>
+        <button id="btn-close-modal" type="button">Dismiss for This SHA</button>
       </div>
     </div>
   </div>
@@ -302,27 +302,32 @@
       "use strict";
 
       const GITHUB_API_VERSION = "2026-03-10";
+      const DEFAULT_MASTER_HUB_REPO = "Summer-Warrior/Project-MPV-RP-Master-Hub";
+      const DEFAULT_GAME_ENGINE_REPO = "Summer-Warrior/Tcg-game-engine-test";
+      const THIS_REPO = "Summer-Warrior/MPV-TCG-Card-Making-Software-Updated";
+
+      // Canonical 20-Color Pie Wheel + {C} (Unified across MPV Card Maker, Tcg-game-engine-test & Master Hub)
       const BASE_20_COLORS = [
         { code: "{C}", name: "Colorless", hex: "#9ea7b8" },
         { code: "{W}", name: "White", hex: "#f5f2e6" },
-        { code: "{U}", name: "Blue", hex: "#3b82f6" },
-        { code: "{B}", name: "Black", hex: "#2d2838" },
-        { code: "{R}", name: "Red", hex: "#e14c4c" },
-        { code: "{G}", name: "Green", hex: "#2ea865" },
-        { code: "{P}", name: "Purple", hex: "#8e55d9" },
-        { code: "{Y}", name: "Yellow", hex: "#ecc94b" },
-        { code: "{O}", name: "Orange", hex: "#ea8434" },
+        { code: "{Iv}", name: "Ivory", hex: "#ede3c8" },
         { code: "{Cy}", name: "Cyan", hex: "#22c7d6" },
-        { code: "{Pk}", name: "Pink", hex: "#ec6ea8" },
-        { code: "{Br}", name: "Brown", hex: "#8d5d3b" },
-        { code: "{Te}", name: "Teal", hex: "#1f9d8b" },
+        { code: "{Az}", name: "Azure", hex: "#2563eb" },
+        { code: "{U}", name: "Blue", hex: "#3b82f6" },
         { code: "{In}", name: "Indigo", hex: "#4f5bd5" },
-        { code: "{Mg}", name: "Magenta", hex: "#d63384" },
-        { code: "{Li}", name: "Lime", hex: "#84cc16" },
-        { code: "{Sl}", name: "Silver", hex: "#cbd5e1" },
-        { code: "{Gd}", name: "Gold", hex: "#d4a84b" },
-        { code: "{Cr}", name: "Crimson", hex: "#b91c1c" },
+        { code: "{Vi}", name: "Violet", hex: "#7c3aed" },
         { code: "{Ob}", name: "Obsidian", hex: "#181a24" },
+        { code: "{B}", name: "Black", hex: "#2d2838" },
+        { code: "{Cr}", name: "Crimson", hex: "#b91c1c" },
+        { code: "{Mg}", name: "Magenta", hex: "#d63384" },
+        { code: "{Sc}", name: "Scarlet", hex: "#ef4444" },
+        { code: "{R}", name: "Red", hex: "#e14c4c" },
+        { code: "{Or}", name: "Orange", hex: "#ea8434" },
+        { code: "{Am}", name: "Amber", hex: "#d97706" },
+        { code: "{Ch}", name: "Chartreuse", hex: "#84cc16" },
+        { code: "{G}", name: "Green", hex: "#2ea865" },
+        { code: "{Ja}", name: "Jade", hex: "#10b981" },
+        { code: "{Te}", name: "Teal", hex: "#14b8a6" },
         { code: "{Aq}", name: "Aqua", hex: "#38bdf8" }
       ];
 
@@ -344,7 +349,7 @@
         health: null,
         selectedPips: [], // STRICTLY ZERO default colors selected
         paused: false,
-        alertedShas: new Set(JSON.parse(localStorage.getItem("mpv_alerted_shas") || "[]"))
+        dismissedShas: new Set(JSON.parse(localStorage.getItem("mpv_dismissed_alignment_shas") || "[]"))
       };
 
       const el = (id) => document.getElementById(id);
@@ -358,6 +363,37 @@
           return null;
         }
       }
+
+      function buildHandshakeEnvelope() {
+        return {
+          repo: THIS_REPO,
+          masterHub: state.appManifest?.linkedMasterHub || DEFAULT_MASTER_HUB_REPO,
+          gameEngine: state.appManifest?.linkedGameEngineRepo || DEFAULT_GAME_ENGINE_REPO,
+          manifest: state.appManifest,
+          repoLink: state.repoLink,
+          contract: state.contract,
+          health: state.health
+        };
+      }
+
+      function postHandshakeMessages(targetWindow, targetOrigin) {
+        if (!targetWindow || targetWindow === window) return;
+        const origin = targetOrigin && targetOrigin !== "null" ? targetOrigin : "*";
+        const env = buildHandshakeEnvelope();
+        try {
+          targetWindow.postMessage({ type: "NEXUS_APP_MANIFEST_READY", ...env }, origin);
+          targetWindow.postMessage({ type: "MPV_CARD_MAKER_READY", ...env }, origin);
+        } catch (_err) {
+          // Ignore cross-origin postMessage restrictions
+        }
+      }
+
+      window.addEventListener("message", (event) => {
+        if (!event.data || typeof event.data !== "object") return;
+        if (event.data.type === "NEXUS_HUB_PING") {
+          postHandshakeMessages(event.source || window.parent, event.origin);
+        }
+      });
 
       function renderHealthBadge() {
         const pill = el("health-pill");
@@ -380,6 +416,7 @@
 
         el("handshake-summary").textContent =
           "Contract v" + c.contractVersion + " • " + c.cardMakerRepo + " <-> " + c.gameEngineRepo +
+          " • Hub: " + (c.masterHubRepo || DEFAULT_MASTER_HUB_REPO) +
           " • Gate: " + (bothConsented ? "FINALIZED (BOTH CONSENTED)" : "STAGED PREVIEW (Awaiting Dual Consent)");
 
         const badges = el("consent-badges");
@@ -488,14 +525,14 @@
         const code = el("review-code").value.trim();
         const rules = el("review-rules").value;
         const mode = el("review-mode").value;
-        const variantId = el("review-variant").value || "EDOPRO_CUSTOM_FORK";
-        const bounds = snap?.firestoreBounds || { maxCardNameLength: 120, maxRulesTextLength: 2000, maxCodeStringLength: 21 };
+        const variantId = el("review-variant").value || "ULTIMATE_TCG_WIP";
+        const bounds = snap?.firestoreBounds || { maxCardNameLength: 100, maxRulesTextLength: 1000, maxCodeStringLength: 21 };
 
         const issues = [];
         if (!name) issues.push("Card name is empty.");
         if (name.length > bounds.maxCardNameLength) issues.push("Card name exceeds Firestore bound (" + bounds.maxCardNameLength + ").");
         if (rules.length > bounds.maxRulesTextLength) issues.push("Rules text exceeds Firestore bound (" + bounds.maxRulesTextLength + ").");
-        if (name.includes("|") || rules.includes("|")) issues.push("Reserved delimiter '|' detected — will be sanitized in board descriptor.");
+        if (name.includes("|") || rules.includes("|")) issues.push("Reserved delimiter '|' detected — sanitized to '/' in descriptors.");
         if (code && !/^[0-9]{1,21}$/.test(code)) issues.push("Code string must match ^[0-9]{1,21}$ (BigInt21Engine).");
         if (/.*[0-9]{22}.*/.test(rules)) issues.push("22+ consecutive digits detected in rules text.");
         if (mode === "MATCH_GAMEPLAY" && /time[\s-]?travel|filter\s*(19|20|21)/i.test(rules)) {
@@ -507,7 +544,7 @@
         if (issues.length === 0) {
           const ok = document.createElement("div");
           ok.className = "audit-item pass";
-          ok.textContent = "Card Frame Review PASSED against live snapshot (" + variantId + ") and WIP 20-Color Pie Spec.";
+          ok.textContent = "Card Frame Review PASSED against live snapshot (" + variantId + ") and unified 20-Color Pie Spec.";
           out.appendChild(ok);
         } else {
           issues.forEach((msg) => {
@@ -518,11 +555,26 @@
           });
         }
 
-        const safeDesc = [variantId, code || "0", sanitizeDescriptor(name), state.selectedPips.join("")].join("|");
+        const pipsStr = state.selectedPips.join("");
+        const safeName = sanitizeDescriptor(name || "Unnamed Card");
+        const safeRules = sanitizeDescriptor(rules);
+        const unifiedV2 = [
+          "@V2",
+          variantId,
+          code || "0",
+          safeName,
+          "Creature",
+          pipsStr,
+          "0/0",
+          (snap?.schemaDefinitions?.cardEffectTypes || ["DIRECT_DAMAGE_BURN"])[0],
+          safeRules
+        ].join("|");
+        const legacyDesc = [safeName, pipsStr || "0", "0", "0", "Creature", safeRules].join("|");
+
         const padded = (code || "0").padStart(21, "0");
         const script = variantId === "FORGE_CUSTOM_CLONE"
-          ? "Name:" + sanitizeDescriptor(name) + "\nSVar:CodeString21:" + (code || "0") + "\nSVar:ColorPie:" + state.selectedPips.join("") + "\n# SafeDescriptor: " + safeDesc
-          : "-- File: c" + padded + ".lua (" + variantId + ")\nlocal c = { id = \"" + (code || "0") + "\", pips = \"" + state.selectedPips.join("") + "\" }\n-- SafeDescriptor: " + safeDesc + "\nreturn c";
+          ? "Name:" + safeName + "\nSVar:CodeString21:" + (code || "0") + "\nSVar:ColorPie:" + pipsStr + "\n# UnifiedV2: " + unifiedV2 + "\n# LegacyDescriptor: " + legacyDesc
+          : "-- File: c" + padded + ".lua (" + variantId + ")\nlocal c = { id = \"" + (code || "0") + "\", pips = \"" + pipsStr + "\" }\n-- UnifiedV2: " + unifiedV2 + "\n-- LegacyDescriptor: " + legacyDesc + "\nreturn c";
         el("script-preview").textContent = script;
       }
 
@@ -531,25 +583,30 @@
         if (!id) return false;
         const gate = state.appManifest?.masterHubAdminGate || {};
         const pool = [...(gate.adminRoleIds || []), ...(gate.adminUserIds || []), ...(gate.adminEmails || [])].map((x) => String(x).toLowerCase());
-        return pool.length === 0 ? id.includes("admin") : pool.includes(id);
+        return pool.length === 0 ? false : pool.includes(id);
       }
 
-      function maybeShowAdminModal() {
+      function updateAdminModalButtons() {
+        const isAdmin = matchesAdminGate();
+        el("btn-pause-sync").style.display = isAdmin ? "inline-block" : "none";
+        el("btn-fire-discord").style.display = isAdmin ? "inline-block" : "none";
+      }
+
+      function maybeShowAlignmentModal() {
         const h = state.health;
         if (!h || (h.severity !== "DEGRADED" && h.severity !== "BREAKING_INCOMPATIBLE")) return;
-        if (!matchesAdminGate()) return;
-        if (h.failingCommitSha && state.alertedShas.has(h.failingCommitSha)) return;
+        const key = (h.failingCommitSha || "unknown") + "|" + h.severity;
+        if (state.dismissedShas.has(key)) return;
 
+        updateAdminModalButtons();
+        el("admin-modal-title").textContent = h.severity === "BREAKING_INCOMPATIBLE"
+          ? "Alignment Alert: BREAKING_INCOMPATIBLE"
+          : "Cross-Repo Alignment Warning: " + h.severity;
         el("admin-modal-body").textContent =
           "Severity: " + h.severity + " • Engine Commit: " + (h.failingCommitSha || "unknown") +
-          " • Master Hub Ack: " + h.masterHubAckStatus;
+          " • Master Hub (" + (state.appManifest?.linkedMasterHub || DEFAULT_MASTER_HUB_REPO) + ") Ack: " + h.masterHubAckStatus;
         el("admin-modal-details").textContent = JSON.stringify(h, null, 2);
         el("admin-modal").classList.add("open");
-
-        if (h.failingCommitSha) {
-          state.alertedShas.add(h.failingCommitSha);
-          localStorage.setItem("mpv_alerted_shas", JSON.stringify([...state.alertedShas]));
-        }
       }
 
       function updateMailtoHref() {
@@ -564,7 +621,7 @@
           el("sync-log").textContent = "Sync paused by Administrator.";
           return;
         }
-        const repo = state.repoLink?.linkedGameEngineRepo || "Summer-Warrior/Tcg-game-engine-test";
+        const repo = state.repoLink?.linkedGameEngineRepo || DEFAULT_GAME_ENGINE_REPO;
         const branch = state.repoLink?.linkedGameEngineBranch || "main";
         const url = "https://api.github.com/repos/" + repo + "/branches/" + branch;
         const etagKey = "etag_" + repo;
@@ -624,7 +681,23 @@
         renderSnapshot();
         renderPipPickers();
         updateMailtoHref();
-        maybeShowAdminModal();
+        updateAdminModalButtons();
+        maybeShowAlignmentModal();
+
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("hubSync") === "1" || params.get("hubSync") === "true") {
+          postHandshakeMessages(window.parent, "*");
+          postHandshakeMessages(window.opener, "*");
+          syncLiveEngine();
+        }
+        if (params.get("exportClientInfo") === "1" || params.get("exportClientInfo") === "true") {
+          el("sync-log").textContent = "Client Info Ready: " + JSON.stringify({
+            nexusApp: state.appManifest,
+            nexusRepoLink: state.repoLink
+          });
+          postHandshakeMessages(window.parent, "*");
+          postHandshakeMessages(window.opener, "*");
+        }
       }
 
       el("btn-live-sync").addEventListener("click", syncLiveEngine);
@@ -639,9 +712,11 @@
         navigator.clipboard?.writeText(el("script-preview").textContent || "");
       });
       el("btn-save-admin").addEventListener("click", () => {
-        maybeShowAdminModal();
+        updateAdminModalButtons();
+        maybeShowAlignmentModal();
       });
       el("btn-pause-sync").addEventListener("click", () => {
+        if (!matchesAdminGate()) return;
         state.paused = true;
         renderHealthBadge();
         el("admin-modal").classList.remove("open");
@@ -654,6 +729,7 @@
         });
       });
       el("btn-fire-discord").addEventListener("click", async () => {
+        if (!matchesAdminGate()) return;
         const hook = (el("discord-webhook").value || "").trim();
         if (!hook) return;
         await fetch(hook, {
@@ -665,7 +741,15 @@
           })
         });
       });
-      el("btn-close-modal").addEventListener("click", () => el("admin-modal").classList.remove("open"));
+      el("btn-close-modal").addEventListener("click", () => {
+        const h = state.health;
+        if (h) {
+          const key = (h.failingCommitSha || "unknown") + "|" + h.severity;
+          state.dismissedShas.add(key);
+          localStorage.setItem("mpv_dismissed_alignment_shas", JSON.stringify([...state.dismissedShas]));
+        }
+        el("admin-modal").classList.remove("open");
+      });
 
       boot();
     })();

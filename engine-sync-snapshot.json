@@ -1,10 +1,36 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "engineRepo": "Summer-Warrior/Tcg-game-engine-test",
   "engineBranch": "main",
   "commitSha": "baseline-seed",
   "capturedAt": "2026-11-23T00:00:00Z",
   "baseVariants": [
+    {
+      "baseVariantId": "ULTIMATE_TCG_WIP",
+      "displayName": "Ultimate TCG (WIP Canonical)",
+      "upstreamSourceLock": false,
+      "zones": [
+        "Main Deck",
+        "Sub-Deck",
+        "Battlefield",
+        "Resource Pool",
+        "Graveyard",
+        "Exile"
+      ],
+      "phases": [
+        "DRAW",
+        "STANDBY",
+        "MAIN",
+        "COMBAT",
+        "END"
+      ],
+      "resourceLabels": [
+        "20-Color Pie",
+        "LP / Life",
+        "Register-21"
+      ],
+      "scriptType": "HYBRID_LUA_SVAR"
+    },
     {
       "baseVariantId": "EDOPRO_CUSTOM_FORK",
       "displayName": "EDOPro Custom 21-Digit Fork",
@@ -21,9 +47,8 @@
       "phases": [
         "DRAW",
         "STANDBY",
-        "MAIN_1",
-        "BATTLE",
-        "MAIN_2",
+        "MAIN",
+        "COMBAT",
         "END"
       ],
       "resourceLabels": [
@@ -47,12 +72,10 @@
         "Command"
       ],
       "phases": [
-        "UNTAP",
-        "UPKEEP",
         "DRAW",
-        "MAIN_1",
+        "STANDBY",
+        "MAIN",
         "COMBAT",
-        "MAIN_2",
         "END"
       ],
       "resourceLabels": [
@@ -76,12 +99,10 @@
         "Exile"
       ],
       "phases": [
-        "UNTAP",
         "DRAW",
         "STANDBY",
-        "MAIN_1",
-        "BATTLE",
-        "MAIN_2",
+        "MAIN",
+        "COMBAT",
         "END"
       ],
       "resourceLabels": [
@@ -105,9 +126,9 @@
     ]
   },
   "firestoreBounds": {
-    "maxCardNameLength": 120,
+    "maxCardNameLength": 100,
     "maxCardTypeLength": 120,
-    "maxRulesTextLength": 2000,
+    "maxRulesTextLength": 1000,
     "maxDeckSize": 100,
     "maxZonePlacements": 60,
     "maxCodeStringLength": 21,
@@ -143,24 +164,20 @@
       "descriptor"
     ],
     "turnPhases": [
-      "UNTAP",
-      "UPKEEP",
       "DRAW",
       "STANDBY",
-      "MAIN_1",
+      "MAIN",
       "COMBAT",
-      "BATTLE",
-      "MAIN_2",
       "END"
     ],
     "cardEffectTypes": [
-      "ACTIVATED",
-      "TRIGGERED",
-      "CONTINUOUS",
-      "QUICK",
-      "END_TURN",
-      "EXTRA_TURN",
-      "STAT_MODIFIER_21"
+      "DIRECT_DAMAGE_BURN",
+      "LIFE_RESTORE_HEAL",
+      "ATK_DEF_BUFF",
+      "DRAW_CARDS",
+      "RESOURCE_RAMP",
+      "TARGET_DESTROY_REMOVAL",
+      "NEGATE_AND_COUNTER"
     ]
   }
 }

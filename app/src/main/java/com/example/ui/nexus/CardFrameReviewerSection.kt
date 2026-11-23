@@ -397,15 +397,16 @@ fun CardFrameReviewerSection(
             }
         }
 
-        // ---- Auto-Generated Scripts (Lua / Forge SVar / Hybrid / Safe Descriptor) ----
+        // ---- Auto-Generated Scripts (Lua / Forge SVar / Hybrid / Unified @V2 / Legacy Board) ----
         uiState.reviewAuditResult?.let { audit ->
             item {
-                val tabs = listOf("Lua 21", "Forge SVar", "Hybrid", "Safe Descriptor")
+                val tabs = listOf("Lua 21", "Forge SVar", "Hybrid", "Unified @V2", "Legacy Board")
                 val activeOutput = when (scriptTab) {
                     0 -> audit.generatedLuaScript
                     1 -> audit.generatedForgeSvarScript
                     2 -> audit.generatedHybridScript
-                    else -> audit.sanitizedDescriptor
+                    3 -> audit.sanitizedDescriptor
+                    else -> audit.legacyDescriptor
                 }
                 Surface(
                     shape = MaterialTheme.shapes.medium,
@@ -545,24 +546,24 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPolygon(
 private fun colorForPipCode(code: String): Color = when (code) {
     "{C}" -> Color(0xFF9EA7B8)
     "{W}" -> Color(0xFFF5F2E6)
-    "{U}" -> Color(0xFF3B82F6)
-    "{B}" -> Color(0xFF3A3447)
-    "{R}" -> Color(0xFFE14C4C)
-    "{G}" -> Color(0xFF2EA865)
-    "{P}" -> Color(0xFF8E55D9)
-    "{Y}" -> Color(0xFFECC94B)
-    "{O}" -> Color(0xFFEA8434)
+    "{Iv}" -> Color(0xFFEDE6D0)
     "{Cy}" -> Color(0xFF22C7D6)
-    "{Pk}" -> Color(0xFFEC6EA8)
-    "{Br}" -> Color(0xFF8D5D3B)
-    "{Te}" -> Color(0xFF1F9D8B)
+    "{Az}" -> Color(0xFF007FFF)
+    "{U}" -> Color(0xFF3B82F6)
     "{In}" -> Color(0xFF4F5BD5)
-    "{Mg}" -> Color(0xFFD63384)
-    "{Li}" -> Color(0xFF84CC16)
-    "{Sl}" -> Color(0xFFCBD5E1)
-    "{Gd}" -> Color(0xFFD4A84B)
-    "{Cr}" -> Color(0xFFB91C1C)
+    "{Vi}" -> Color(0xFF8B5CF6)
     "{Ob}" -> Color(0xFF1D202C)
+    "{B}" -> Color(0xFF3A3447)
+    "{Cr}" -> Color(0xFFDC143C)
+    "{Mg}" -> Color(0xFFD63384)
+    "{Sc}" -> Color(0xFFFF2400)
+    "{R}" -> Color(0xFFE14C4C)
+    "{Or}" -> Color(0xFFEA8434)
+    "{Am}" -> Color(0xFFF59E0B)
+    "{Ch}" -> Color(0xFF84CC16)
+    "{G}" -> Color(0xFF2EA865)
+    "{Ja}" -> Color(0xFF00A86B)
+    "{Te}" -> Color(0xFF1F9D8B)
     "{Aq}" -> Color(0xFF38BDF8)
     else -> StudioGold
 }

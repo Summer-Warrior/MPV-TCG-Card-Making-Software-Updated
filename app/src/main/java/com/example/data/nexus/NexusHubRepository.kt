@@ -34,6 +34,8 @@ class NexusHubRepository(
     private val linkManifestFile = File(storageDir, "nexus-repo-link.json")
     private val appliedIndexFile = File(storageDir, "client-codestring-index.json")
     private val codedCardsFile = File(storageDir, "coded_cards.json")
+    private val hubEtagsFile = File(storageDir, "hub_etags.json")
+    private val hubBodiesFile = File(storageDir, "hub_cached_bodies.json")
 
     private val linkAdapter = moshi.adapter(NexusRepoLinkManifest::class.java).indent("  ")
     private val indexAdapter = moshi.adapter(NexusClientCodestringIndex::class.java).indent("  ")
@@ -41,6 +43,9 @@ class NexusHubRepository(
     private val codedCardsAdapter = moshi.adapter<List<NexusCodedCard>>(
         Types.newParameterizedType(List::class.java, NexusCodedCard::class.java)
     ).indent("  ")
+    private val stringMapAdapter = moshi.adapter<Map<String, String>>(
+        Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
+    )
 
     private object Keys {
         val REMEMBER_PAT = booleanPreferencesKey("remember_pat_opt_in")
@@ -53,9 +58,15 @@ class NexusHubRepository(
             saveManifest(defaultManifest)
             return@withContext defaultManifest
         }
-        runCatching {
+        val loaded = runCatching {
             linkAdapter.fromJson(linkManifestFile.readText(Charsets.UTF_8))
         }.getOrNull() ?: NexusRepoLinkManifest()
+        if (loaded.linkedHubRepo.equals(LEGACY_HUB_SLUG, ignoreCase = true)) {
+            val migrated = loaded.copy(linkedHubRepo = LIVE_HUB_SLUG, bridgeSchemaVersion = "1.1.0")
+            saveManifest(migrated)
+            return@withContext migrated
+        }
+        loaded
     }
 
     suspend fun saveManifest(manifest: NexusRepoLinkManifest) = withContext(Dispatchers.IO) {
@@ -75,9 +86,15 @@ class NexusHubRepository(
             saveAppliedIndex(seed)
             return@withContext seed
         }
-        runCatching {
+        val loaded = runCatching {
             indexAdapter.fromJson(appliedIndexFile.readText(Charsets.UTF_8))
         }.getOrNull() ?: buildSeedClientIndex()
+        if (loaded.hubRepo.equals(LEGACY_HUB_SLUG, ignoreCase = true)) {
+            val migrated = loaded.copy(hubRepo = LIVE_HUB_SLUG)
+            saveAppliedIndex(migrated)
+            return@withContext migrated
+        }
+        loaded
     }
 
     suspend fun saveAppliedIndex(index: NexusClientCodestringIndex) = withContext(Dispatchers.IO) {
@@ -119,7 +136,34 @@ class NexusHubRepository(
         }
     }
 
+    suspend fun loadHubEtagCache(): Pair<Map<String, String>, Map<String, String>> = withContext(Dispatchers.IO) {
+        val etags = if (hubEtagsFile.exists()) {
+            runCatching { stringMapAdapter.fromJson(hubEtagsFile.readText(Charsets.UTF_8)) }.getOrNull().orEmpty()
+        } else {
+            emptyMap()
+        }
+        val bodies = if (hubBodiesFile.exists()) {
+            runCatching { stringMapAdapter.fromJson(hubBodiesFile.readText(Charsets.UTF_8)) }.getOrNull().orEmpty()
+        } else {
+            emptyMap()
+        }
+        etags to bodies
+    }
+
+    suspend fun saveHubEtagCache(etags: Map<String, String>, bodies: Map<String, String>) = withContext(Dispatchers.IO) {
+        storageDir.mkdirs()
+        val tmpE = File(storageDir, "hub_etags.json.tmp")
+        tmpE.writeText(stringMapAdapter.toJson(etags), Charsets.UTF_8)
+        tmpE.renameTo(hubEtagsFile)
+        val tmpB = File(storageDir, "hub_cached_bodies.json.tmp")
+        tmpB.writeText(stringMapAdapter.toJson(bodies), Charsets.UTF_8)
+        tmpB.renameTo(hubBodiesFile)
+    }
+
     companion object {
+        private const val LEGACY_HUB_SLUG = "Summer-Warrior/Nexus-Master-Hub"
+        private const val LIVE_HUB_SLUG = "Summer-Warrior/Project-MPV-RP-Master-Hub"
+
         /**
          * Canonical baseline Nexus Master Hub index seed containing non-locked clients
          * (upstreamSourceLock = false) and read-only locked upstream reference entries
@@ -129,7 +173,7 @@ class NexusHubRepository(
             schemaVersion = "1.0.0",
             indexRevision = "local-seed-1.0.0",
             updatedAt = "2026-11-22T00:00:00Z",
-            hubRepo = "Summer-Warrior/Nexus-Master-Hub",
+            hubRepo = LIVE_HUB_SLUG,
             colorPieGrammarVersion = "20-color-canonical-v1",
             clients = listOf(
                 NexusClientDefinition(

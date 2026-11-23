@@ -8,17 +8,38 @@ import java.util.TimeZone
 
 /**
  * Pure Kotlin Two-Way Game Engine Compatibility Auditor, Source Schema Extractor,
- * Dual-Engine Consent Gate, Multi-Target Script Generator (Lua / Forge SVar / Hybrid / Safe Descriptor),
- * Card Frame Reviewer, and Master Hub Admin Gate Evaluator.
+ * Dual-Engine Consent Gate, Startup Alignment Warning Evaluator, Multi-Target Script Generator
+ * (Lua / Forge SVar / Hybrid / Unified @V2 & Legacy Descriptors), Card Frame Reviewer,
+ * and Master Hub Admin Gate Evaluator.
  *
  * Strictly zero Android UI / Compose imports.
  */
 object EngineCompatibilityAuditor {
 
     private val bigIntFuncRegex = Regex("\\b(ADD_21|MUL_21|SUB_21|MOD_21|SCALE_ATK_LP_21)\\b")
-    private val variantRegex = Regex("\\b(EDOPRO_CUSTOM_FORK|FORGE_CUSTOM_CLONE|HYBRID_FORGE_EDOPRO_MIX|[A-Z0-9_]+_CUSTOM_[A-Z0-9_]+)\\b")
-    private val enumBlockRegex = Regex("enum\\s+class\\s+(TurnPhase|CardEffectType)\\s*\\{([^}]*)\\}", setOf(RegexOption.DOT_MATCHES_ALL))
-    private val rulesMaxLengthRegex = Regex("\\.size\\(\\)\\s*<=\\s*(\\d+)")
+    private val variantRegex = Regex(
+        "\\b(ULTIMATE_TCG_WIP|EDOPRO_CUSTOM_FORK|FORGE_CUSTOM_CLONE|HYBRID_FORGE_EDOPRO_MIX|[A-Z0-9_]+_CUSTOM_[A-Z0-9_]+)\\b"
+    )
+    private val enumHeaderRegex = Regex("\\benum\\s+class\\s+(TurnPhase|CardEffectType)\\b")
+    private val enumEntryIdRegex = Regex("^[A-Z][A-Z0-9_]+$")
+
+    // Targeted firestore.rules field-bound regexes (explicitly ignores helper functions like isValidId)
+    private val cardNameBoundRegex = Regex(
+        "(?:customCardName|cardName|data\\.name)\\b[^\\n;]*?\\.size\\(\\)\\s*<=\\s*(\\d+)",
+        RegexOption.IGNORE_CASE,
+    )
+    private val rulesTextBoundRegex = Regex(
+        "(?:customCardAbility|abilityText|rulesText)\\b[^\\n;]*?\\.size\\(\\)\\s*<=\\s*(\\d+)",
+        RegexOption.IGNORE_CASE,
+    )
+    private val deckSizeBoundRegex = Regex(
+        "(?:cardIds|deckCards)\\b[^\\n;]*?\\.size\\(\\)\\s*<=\\s*(\\d+)",
+        RegexOption.IGNORE_CASE,
+    )
+    private val boardCardsBoundRegex = Regex(
+        "(?:hostBoardCards|opponentBoardCards|zonePlacements)\\b[^\\n;]*?\\.size\\(\\)\\s*<=\\s*(\\d+)",
+        RegexOption.IGNORE_CASE,
+    )
 
     /**
      * DUAL-ENGINE CONSENT RULE:
@@ -40,8 +61,159 @@ object EngineCompatibilityAuditor {
     }
 
     /**
-     * Extracts live engine variants, BigInt21 functions, TurnPhase/CardEffectType enums,
-     * and Firestore field length bounds directly from fetched `Tcg-game-engine-test` source files.
+     * Balanced-brace Kotlin enum parser supporting primary constructors `enum class Foo(val x: String) { ... }`,
+     * enum constant constructor args, inline constant bodies, and method bodies with nested braces after `;`.
+     */
+    fun extractKotlinEnumEntries(source: String, enumName: String): List<String> {
+        val headerRegex = Regex("\\benum\\s+class\\s+${Regex.escape(enumName)}\\b")
+        val match = headerRegex.find(source) ?: return emptyList()
+        val len = source.length
+        var i = match.range.last + 1
+
+        // 1. Advance past optional primary constructor (...) / supertypes to the enum body '{'
+        var parenDepth = 0
+        var inLineComment = false
+        var inBlockComment = false
+        var inString = false
+        var escaped = false
+        var bodyStart = -1
+
+        while (i < len) {
+            val ch = source[i]
+            val next = if (i + 1 < len) source[i + 1] else '\u0000'
+            when {
+                inLineComment -> if (ch == '\n') inLineComment = false
+                inBlockComment -> if (ch == '*' && next == '/') {
+                    inBlockComment = false
+                    i++
+                }
+                inString -> {
+                    if (escaped) escaped = false
+                    else if (ch == '\\') escaped = true
+                    else if (ch == '"') inString = false
+                }
+                ch == '/' && next == '/' -> {
+                    inLineComment = true
+                    i++
+                }
+                ch == '/' && next == '*' -> {
+                    inBlockComment = true
+                    i++
+                }
+                ch == '"' -> inString = true
+                ch == '(' -> parenDepth++
+                ch == ')' -> if (parenDepth > 0) parenDepth--
+                ch == '{' && parenDepth == 0 -> {
+                    bodyStart = i + 1
+                    break
+                }
+            }
+            i++
+        }
+        if (bodyStart == -1) return emptyList()
+
+        // 2. Scan enum constants up to the top-level ';' or closing '}' of the enum class
+        val topLevelTokens = mutableListOf<String>()
+        val currentToken = StringBuilder()
+        var braceDepth = 1
+        parenDepth = 0
+        inLineComment = false
+        inBlockComment = false
+        inString = false
+        escaped = false
+        i = bodyStart
+
+        while (i < len && braceDepth > 0) {
+            val ch = source[i]
+            val next = if (i + 1 < len) source[i + 1] else '\u0000'
+            when {
+                inLineComment -> if (ch == '\n') inLineComment = false
+                inBlockComment -> if (ch == '*' && next == '/') {
+                    inBlockComment = false
+                    i++
+                }
+                inString -> {
+                    if (escaped) escaped = false
+                    else if (ch == '\\') escaped = true
+                    else if (ch == '"') inString = false
+                }
+                ch == '/' && next == '/' -> {
+                    inLineComment = true
+                    i++
+                }
+                ch == '/' && next == '*' -> {
+                    inBlockComment = true
+                    i++
+                }
+                ch == '"' -> inString = true
+                ch == '(' -> parenDepth++
+                ch == ')' -> if (parenDepth > 0) parenDepth--
+                ch == '{' -> braceDepth++
+                ch == '}' -> {
+                    braceDepth--
+                    if (braceDepth == 0) {
+                        topLevelTokens += currentToken.toString()
+                        currentToken.clear()
+                        break
+                    }
+                }
+                ch == ';' && braceDepth == 1 && parenDepth == 0 -> {
+                    topLevelTokens += currentToken.toString()
+                    currentToken.clear()
+                    break
+                }
+                ch == ',' && braceDepth == 1 && parenDepth == 0 -> {
+                    topLevelTokens += currentToken.toString()
+                    currentToken.clear()
+                }
+                braceDepth == 1 && parenDepth == 0 -> {
+                    currentToken.append(ch)
+                }
+            }
+            i++
+        }
+
+        return topLevelTokens
+            .mapNotNull { raw ->
+                // Strip leading @Annotations if present and take the final identifier token
+                val cleaned = raw
+                    .replace(Regex("@[A-Za-z0-9_]+(?:\\([^)]*\\))?"), " ")
+                    .trim()
+                val candidate = cleaned.split(Regex("\\s+")).firstOrNull { enumEntryIdRegex.matches(it) }
+                candidate
+            }
+            .distinct()
+    }
+
+    /**
+     * Targeted firestore.rules bounds extractor that matches actual field rules
+     * (`customCardName`, `customCardAbility`, `cardIds`, `hostBoardCards`/`opponentBoardCards`)
+     * without misreading unrelated helper limits like `isValidId`.
+     */
+    fun parseFirestoreBoundsFromRules(
+        rulesText: String,
+        fallback: FirestoreBoundsSpec,
+    ): FirestoreBoundsSpec {
+        if (rulesText.isBlank()) return fallback
+        val maxName = cardNameBoundRegex.find(rulesText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: fallback.maxCardNameLength
+        val maxRules = rulesTextBoundRegex.find(rulesText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: fallback.maxRulesTextLength
+        val maxDeck = deckSizeBoundRegex.find(rulesText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: fallback.maxDeckSize
+        val maxZones = boardCardsBoundRegex.find(rulesText)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: fallback.maxZonePlacements
+        return fallback.copy(
+            maxCardNameLength = maxName,
+            maxRulesTextLength = maxRules,
+            maxDeckSize = maxDeck,
+            maxZonePlacements = maxZones,
+        )
+    }
+
+    /**
+     * Extracts live engine variants, BigInt21 functions, parameterized TurnPhase/CardEffectType enums,
+     * and targeted Firestore field length bounds directly from fetched `Tcg-game-engine-test` source files.
      */
     fun parseSnapshotFromEngineFiles(
         engineRepo: String,
@@ -54,7 +226,8 @@ object EngineCompatibilityAuditor {
         val engineText = fetchedFiles["app/src/main/java/com/example/data/GameEngine.kt"].orEmpty()
         val rulesText = fetchedFiles["firestore.rules"].orEmpty()
         val blueprintText = fetchedFiles["firebase-blueprint.json"].orEmpty()
-        val combined = listOf(modelsText, engineText, rulesText, blueprintText).joinToString("\n")
+        val indexText = fetchedFiles["client-codestring-index.json"].orEmpty()
+        val combined = listOf(modelsText, engineText, rulesText, blueprintText, indexText).joinToString("\n")
 
         val foundBigIntFuncs = bigIntFuncRegex.findAll(combined)
             .map { it.groupValues[1] }
@@ -78,33 +251,21 @@ object EngineCompatibilityAuditor {
                         .replaceFirstChar { ch -> ch.uppercaseChar() },
                     upstreamSourceLock = false,
                     zones = listOf("Main Deck", "Field", "Graveyard", "Exile"),
-                    phases = listOf("DRAW", "MAIN_1", "BATTLE", "END"),
+                    phases = listOf("DRAW", "STANDBY", "MAIN", "COMBAT", "END"),
                     resourceLabels = listOf("LP", "20-Color Pie"),
                     scriptType = if (id.contains("FORGE")) "FORGE_SVAR" else "LUA_21",
                 )
             }
         }
 
-        val parsedEnums = mutableMapOf<String, List<String>>()
-        enumBlockRegex.findAll(combined).forEach { match ->
-            val enumName = match.groupValues[1]
-            val entries = match.groupValues[2]
-                .split(",", "\n", ";")
-                .map { it.trim().substringBefore("(").substringBefore("//").trim() }
-                .filter { it.matches(Regex("^[A-Z][A-Z0-9_]+$")) }
-            if (entries.isNotEmpty()) {
-                parsedEnums[enumName] = entries
-            }
-        }
+        val parsedTurnPhases = extractKotlinEnumEntries(combined, "TurnPhase")
+            .ifEmpty { fallbackBaseline.schemaDefinitions.turnPhases }
+        val parsedEffectTypes = extractKotlinEnumEntries(combined, "CardEffectType")
+            .ifEmpty { fallbackBaseline.schemaDefinitions.cardEffectTypes }
 
-        val ruleLimits = rulesMaxLengthRegex.findAll(rulesText)
-            .mapNotNull { it.groupValues[1].toIntOrNull() }
-            .toList()
-        val updatedBounds = fallbackBaseline.firestoreBounds.copy(
-            maxCardNameLength = ruleLimits.firstOrNull { it in 40..256 }
-                ?: fallbackBaseline.firestoreBounds.maxCardNameLength,
-            maxRulesTextLength = ruleLimits.firstOrNull { it in 500..10000 }
-                ?: fallbackBaseline.firestoreBounds.maxRulesTextLength,
+        val updatedBounds = parseFirestoreBoundsFromRules(
+            rulesText = rulesText,
+            fallback = fallbackBaseline.firestoreBounds,
         )
 
         return EngineSyncSnapshot(
@@ -119,8 +280,8 @@ object EngineCompatibilityAuditor {
             ),
             firestoreBounds = updatedBounds,
             schemaDefinitions = fallbackBaseline.schemaDefinitions.copy(
-                turnPhases = parsedEnums["TurnPhase"] ?: fallbackBaseline.schemaDefinitions.turnPhases,
-                cardEffectTypes = parsedEnums["CardEffectType"] ?: fallbackBaseline.schemaDefinitions.cardEffectTypes,
+                turnPhases = parsedTurnPhases,
+                cardEffectTypes = parsedEffectTypes,
             ),
         )
     }
@@ -154,8 +315,11 @@ object EngineCompatibilityAuditor {
     }
 
     /**
-     * Runs the Benefit-Integrity Compatibility Audit against fetched `Tcg-game-engine-test` files
-     * and remote handshake contract state, returning a signed `EngineHealthStatusPayload`.
+     * Runs the Benefit-Integrity Compatibility Audit against fetched (or ETag-304-cached)
+     * `Tcg-game-engine-test` files and remote handshake contract state, returning a signed
+     * `EngineHealthStatusPayload`.
+     *
+     * Unchanged ETag 304 files are NEVER treated as missing or broken.
      */
     fun runBenefitIntegrityAudit(
         contract: HandshakeContract,
@@ -164,21 +328,29 @@ object EngineCompatibilityAuditor {
         missingFiles: List<String>,
         remoteEngineConsentStatus: String?,
         sourceRepo: String = contract.cardMakerRepo,
+        unchanged304Files: Set<String> = emptySet(),
     ): EngineHealthStatusPayload {
         val brokenCapabilities = mutableListOf<String>()
         val affectedFrames = mutableListOf<String>()
 
-        if (missingFiles.isNotEmpty()) {
-            brokenCapabilities += "MISSING_REQUIRED_FILES:${missingFiles.joinToString(",")}"
+        val effectiveMissing = missingFiles.filterNot { path ->
+            unchanged304Files.any { cachedPath -> path == cachedPath || path.startsWith("$cachedPath ") }
+        }
+        if (effectiveMissing.isNotEmpty()) {
+            brokenCapabilities += "MISSING_REQUIRED_FILES:${effectiveMissing.joinToString(",")}"
             affectedFrames += "ALL_ENGINE_MAPPED_FRAMES"
         }
 
-        val models = fetchedFiles["app/src/main/java/com/example/data/Models.kt"].orEmpty()
-        val engine = fetchedFiles["app/src/main/java/com/example/data/GameEngine.kt"].orEmpty()
-        val rules = fetchedFiles["firestore.rules"].orEmpty()
+        val models = fetchedFiles["app/src/main/java/com/example/data/Models.kt"]
+            ?.takeUnless { it.trim() == "/* ETAG_304_UNCHANGED */" }.orEmpty()
+        val engine = fetchedFiles["app/src/main/java/com/example/data/GameEngine.kt"]
+            ?.takeUnless { it.trim() == "/* ETAG_304_UNCHANGED */" }.orEmpty()
+        val rules = fetchedFiles["firestore.rules"]
+            ?.takeUnless { it.trim() == "/* ETAG_304_UNCHANGED */" }.orEmpty()
         val combined = "$models\n$engine\n$rules"
 
-        if (models.isNotBlank() || engine.isNotBlank()) {
+        val hasRealSourceToAudit = models.isNotBlank() || engine.isNotBlank()
+        if (hasRealSourceToAudit) {
             val has21Digit = combined.contains("21", ignoreCase = true) || combined.contains("BigInt", ignoreCase = true)
             if (!has21Digit) {
                 brokenCapabilities += "21_DIGIT_BIGINT_CODES"
@@ -186,7 +358,8 @@ object EngineCompatibilityAuditor {
             }
             val hasCoreModels = combined.contains("CardTemplate") ||
                 combined.contains("CustomDeck") ||
-                combined.contains("TurnPhase")
+                combined.contains("TurnPhase") ||
+                enumHeaderRegex.containsMatchIn(combined)
             if (!hasCoreModels) {
                 brokenCapabilities += "TURN_PHASE_AND_EFFECT_ENUMS"
                 affectedFrames += "CardTemplate / TurnPhase Mapped Frames"
@@ -208,7 +381,7 @@ object EngineCompatibilityAuditor {
 
         val severity = when {
             commitSha.isBlank() -> EngineHealthSeverity.DEGRADED
-            missingFiles.size >= 3 ||
+            effectiveMissing.size >= 3 ||
                 "HANDSHAKE_CONTRACT_REVOKED" in brokenCapabilities ||
                 "21_DIGIT_BIGINT_CODES" in brokenCapabilities ->
                 EngineHealthSeverity.BREAKING_INCOMPATIBLE
@@ -248,6 +421,63 @@ object EngineCompatibilityAuditor {
     }
 
     /**
+     * Startup Alignment & Update Warning Evaluator (separated from Admin-Only escalation actions).
+     *
+     * Triggers an automatic on-open Alignment Warning Pop-Up whenever:
+     * - Live engine health is `DEGRADED` or `BREAKING_INCOMPATIBLE`, OR
+     * - Mutual repo link status (once checked) is NOT `LINKED_AND_CURRENT`, OR
+     * - Dual-Engine Consent is pending/mismatched for a new staged engine commit SHA.
+     *
+     * Deduplicated per commit SHA + alignment state so dismissing does not spam until the
+     * next commit SHA or manual refresh — works even when `masterHubAdminGate` lists are empty.
+     */
+    fun evaluateAlignmentWarning(
+        healthStatus: EngineHealthStatusPayload,
+        mutualLinkStatus: MutualLinkStatus,
+        hasCheckedHubLink: Boolean,
+        contract: HandshakeContract,
+        stagedSnapshot: EngineSyncSnapshot?,
+        dismissedAlignmentKeys: Set<String>,
+    ): AlignmentWarningEvaluation {
+        val reasons = mutableListOf<String>()
+        val isEngineUnhealthy = healthStatus.severity == EngineHealthSeverity.DEGRADED.wireValue ||
+            healthStatus.severity == EngineHealthSeverity.BREAKING_INCOMPATIBLE.wireValue
+        if (isEngineUnhealthy) {
+            reasons += "Engine Health is ${healthStatus.severity} (${healthStatus.brokenCapabilities.joinToString(", ").ifBlank { "check diagnostics" }})"
+        }
+
+        if (hasCheckedHubLink && mutualLinkStatus != MutualLinkStatus.LINKED_AND_CURRENT) {
+            reasons += "Master Hub Mutual Link is ${mutualLinkStatus.wireValue} (expected LINKED_AND_CURRENT)"
+        }
+
+        val stagedSha = stagedSnapshot?.commitSha.orEmpty()
+        val consentMismatched = stagedSha.isNotBlank() && !canFinalizeEngineSync(contract, stagedSha)
+        if (consentMismatched) {
+            reasons += "Dual-Engine Consent pending/mismatched for staged commit ${stagedSha.take(10)} " +
+                "(Card Maker: ${contract.cardMakerConsent.status}, Game Engine: ${contract.gameEngineConsent.status})"
+        }
+
+        val effectiveSha = healthStatus.failingCommitSha.ifBlank { stagedSha }.ifBlank { "baseline" }
+        val alignmentKey = listOf(
+            effectiveSha.take(16),
+            healthStatus.severity,
+            if (hasCheckedHubLink) mutualLinkStatus.wireValue else "UNCHECKED",
+            if (consentMismatched) "CONSENT_PENDING" else "CONSENT_OK",
+        ).joinToString("|")
+
+        val shouldShow = reasons.isNotEmpty() && alignmentKey !in dismissedAlignmentKeys
+        return AlignmentWarningEvaluation(
+            shouldShowPopup = shouldShow,
+            alignmentKey = alignmentKey,
+            reasons = reasons,
+            engineHealthSeverity = healthStatus.severity,
+            mutualLinkStatus = mutualLinkStatus,
+            consentMismatched = consentMismatched,
+            failingCommitSha = effectiveSha,
+        )
+    }
+
+    /**
      * Automatically sanitizes reserved board descriptor delimiters such as `|`.
      */
     fun sanitizeReservedDelimiters(raw: String, reserved: List<String> = listOf("|")): String {
@@ -262,8 +492,11 @@ object EngineCompatibilityAuditor {
 
     /**
      * Card Frame Reviewer: audits a card frame & its fields against BOTH the live
-     * `EngineSyncSnapshot` AND the WIP TCG Onboarding Spec (20-Color Pie + Layer 20 Omnichroma,
+     * `EngineSyncSnapshot` AND the WIP TCG Onboarding Spec (unified 20-Color Pie + Layer 20 Omnichroma,
      * reserved delimiter safety, Firestore bounds, 21-digit register/stats, and Time-Travel rules).
+     *
+     * Outputs both the unified `@V2|...` board descriptor and the legacy `name|cost|attack|defense|cardType|abilityText`
+     * compatibility descriptor.
      */
     fun reviewCardFrame(
         cardName: String,
@@ -393,7 +626,7 @@ object EngineCompatibilityAuditor {
             }
         }
 
-        // 20-Color Pie + Layer 20 Omnichroma 6-geometry pip check
+        // Unified 20-Color Pie + Layer 20 Omnichroma 6-geometry pip check
         selectedPips.forEach { pip ->
             val validPip = CardCodeValidator.isValidColorPiePip(pip) || pip in OmnichromaSacredCatalog.validCodes
             if (!validPip) {
@@ -408,28 +641,49 @@ object EngineCompatibilityAuditor {
         val safeName = sanitizeReservedDelimiters(cardName, bounds.reservedDelimiters)
         val safeType = sanitizeReservedDelimiters(cardType, bounds.reservedDelimiters)
         val safeStats = sanitizeReservedDelimiters(statText, bounds.reservedDelimiters)
+        val safeRules = sanitizeReservedDelimiters(rulesText, bounds.reservedDelimiters)
         val safeCode = cleanCode.ifBlank { "0" }
         val padded21 = safeCode.padStart(21, '0')
         val pipJoined = selectedPips.joinToString("")
+        val resolvedEffect = effectType.ifBlank {
+            snapshot.schemaDefinitions.cardEffectTypes.firstOrNull() ?: "DIRECT_DAMAGE_BURN"
+        }
 
+        // Unified Tcg-game-engine-test @V2 board descriptor
         val sanitizedDescriptor = listOf(
-            baseVariantId,
+            "@V2",
+            sanitizeReservedDelimiters(baseVariantId, bounds.reservedDelimiters),
             safeCode,
             safeName,
             safeType,
             pipJoined,
             safeStats,
-            effectType.ifBlank { "ACTIVATED" },
+            sanitizeReservedDelimiters(resolvedEffect, bounds.reservedDelimiters),
+            safeRules,
+        ).joinToString("|")
+
+        // Legacy compatibility descriptor: name|cost|attack|defense|cardType|abilityText
+        val statParts = safeStats.split("/").map { it.trim() }
+        val legacyAtk = statParts.getOrNull(0).orEmpty().ifBlank { "0" }
+        val legacyDef = statParts.getOrNull(1).orEmpty().ifBlank { "0" }
+        val legacyDescriptor = listOf(
+            safeName,
+            pipJoined.ifBlank { "0" },
+            legacyAtk,
+            legacyDef,
+            safeType,
+            safeRules,
         ).joinToString("|")
 
         val luaScript = buildString {
             append("-- Auto-generated for $baseVariantId (Tcg-game-engine-test@${snapshot.commitSha.take(8)})\n")
             append("-- File: c$padded21.lua\n")
+            append("-- UnifiedDescriptor: $sanitizedDescriptor\n")
             append("local c$safeCode = {}\n")
             append("c$safeCode.code = \"$safeCode\"\n")
             append("c$safeCode.name = \"${safeName.replace("\"", "\\\"")}\"\n")
             append("c$safeCode.pips = \"$pipJoined\"\n")
-            append("c$safeCode.effect_type = \"${effectType.ifBlank { "ACTIVATED" }}\"\n")
+            append("c$safeCode.effect_type = \"$resolvedEffect\"\n")
             append("function c$safeCode.initial_effect(card)\n")
             append("    return card ~= nil\n")
             append("end\n")
@@ -442,16 +696,17 @@ object EngineCompatibilityAuditor {
             append("ManaCost:${pipJoined.ifBlank { "no cost" }}\n")
             append("SVar:CodeString21:$safeCode\n")
             append("SVar:BaseVariant:$baseVariantId\n")
-            append("SVar:EffectType:${effectType.ifBlank { "ACTIVATED" }}\n")
+            append("SVar:EffectType:$resolvedEffect\n")
             if (safeStats.isNotBlank()) {
                 append("PT:$safeStats\n")
             }
-            append("Oracle:${sanitizeReservedDelimiters(rulesText, bounds.reservedDelimiters)}\n")
+            append("Oracle:$safeRules\n")
         }
 
         val hybridScript = buildString {
             append("# Hybrid Forge x EDOPro Script ($baseVariantId)\n")
-            append("# Descriptor: $sanitizedDescriptor\n\n")
+            append("# UnifiedDescriptor: $sanitizedDescriptor\n")
+            append("# LegacyDescriptor: $legacyDescriptor\n\n")
             append("[FORGE_SVAR]\n")
             append(forgeSvarScript)
             append("\n[LUA_21]\n")
@@ -461,6 +716,7 @@ object EngineCompatibilityAuditor {
         return CardFrameReviewAuditResult(
             isCompatible = issues.none { it.severity == EngineHealthSeverity.BREAKING_INCOMPATIBLE },
             sanitizedDescriptor = sanitizedDescriptor,
+            legacyDescriptor = legacyDescriptor,
             generatedLuaScript = luaScript,
             generatedForgeSvarScript = forgeSvarScript,
             generatedHybridScript = hybridScript,

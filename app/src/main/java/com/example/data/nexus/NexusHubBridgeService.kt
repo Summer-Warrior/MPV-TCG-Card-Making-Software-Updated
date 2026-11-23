@@ -50,7 +50,11 @@ class NexusHubBridgeService(
         localManifest: NexusRepoLinkManifest,
         currentAppliedIndex: NexusClientCodestringIndex,
         fineGrainedPat: String?,
+        cachedEtags: Map<String, String> = emptyMap(),
+        cachedBodies: Map<String, String> = emptyMap(),
     ): HubHandshakeResult = withContext(Dispatchers.IO) {
+        val nextEtags = cachedEtags.toMutableMap()
+        val nextBodies = cachedBodies.toMutableMap()
         when (val validation = NexusSchemaValidator.validateRepoLinkManifest(localManifest)) {
             is SchemaValidationResult.Invalid -> {
                 return@withContext HubHandshakeResult(
@@ -62,17 +66,21 @@ class NexusHubBridgeService(
                     pulledIndex = null,
                     changelogDiff = null,
                     checkedAtIso = currentUtcIso(),
+                    updatedEtags = nextEtags,
+                    updatedBodies = nextBodies,
                 )
             }
             is SchemaValidationResult.Valid -> Unit
         }
 
-        // 1. Check thisRepo/nexus-repo-link.json on GitHub
+        // 1. Check thisRepo/nexus-repo-link.json on GitHub (ETag cached)
         val thisRepoFile = fetchGitHubFileUtf8(
             repoSlug = localManifest.thisRepo,
             branch = localManifest.thisBranch,
             path = LINK_MANIFEST_PATH,
             pat = fineGrainedPat,
+            etags = nextEtags,
+            bodies = nextBodies,
         )
         val parsedThisRemote = (thisRepoFile as? GitHubFileFetch.Found)
             ?.contentUtf8
@@ -80,12 +88,14 @@ class NexusHubBridgeService(
         val thisPointsToHub = parsedThisRemote?.linkedHubRepo
             ?.equals(localManifest.linkedHubRepo, ignoreCase = true) == true
 
-        // 2. Check linkedHubRepo/nexus-repo-link.json on GitHub
+        // 2. Check linkedHubRepo/nexus-repo-link.json on GitHub (ETag cached)
         val hubLinkFile = fetchGitHubFileUtf8(
             repoSlug = localManifest.linkedHubRepo,
             branch = localManifest.linkedHubBranch,
             path = LINK_MANIFEST_PATH,
             pat = fineGrainedPat,
+            etags = nextEtags,
+            bodies = nextBodies,
         )
         val parsedHubLink = (hubLinkFile as? GitHubFileFetch.Found)
             ?.contentUtf8
@@ -97,12 +107,14 @@ class NexusHubBridgeService(
                 parsedHubLink.linkedRepos.any { it.equals(localManifest.thisRepo, ignoreCase = true) }
             )
 
-        // 3. Pull nexus-bridge/client-codestring-index.json from linkedHubRepo
+        // 3. Pull nexus-bridge/client-codestring-index.json from linkedHubRepo (ETag cached)
         val hubIndexFetch = fetchGitHubFileUtf8(
             repoSlug = localManifest.linkedHubRepo,
             branch = localManifest.linkedHubBranch,
             path = localManifest.hubIndexPath,
             pat = fineGrainedPat,
+            etags = nextEtags,
+            bodies = nextBodies,
         )
 
         var pulledIndex: NexusClientCodestringIndex? = null
@@ -196,6 +208,8 @@ class NexusHubBridgeService(
             pulledIndex = pulledIndex,
             changelogDiff = diff,
             checkedAtIso = currentUtcIso(),
+            updatedEtags = nextEtags,
+            updatedBodies = nextBodies,
         )
     }
 
@@ -295,16 +309,9 @@ class NexusHubBridgeService(
 
     fun generateWorkflowYaml(manifest: NexusRepoLinkManifest): String = buildString {
         append("name: MPV <-> Nexus Master Hub Bidirectional Sync\n\n")
+        append("# Pre-release personal install mode: checks run when opening the installed app.\n")
         append("on:\n")
-        append("  workflow_dispatch:\n")
-        append("  schedule:\n")
-        append("    - cron: \"0 */12 * * *\"\n")
-        append("  push:\n")
-        append("    branches:\n")
-        append("      - ${manifest.thisBranch}\n")
-        append("    paths:\n")
-        append("      - \"nexus-repo-link.json\"\n")
-        append("      - \"${manifest.exportedPacksDir.trimEnd('/')}/**\"\n\n")
+        append("  workflow_dispatch:\n\n")
         append("permissions:\n")
         append("  contents: write\n\n")
         append("jobs:\n")
@@ -338,14 +345,21 @@ class NexusHubBridgeService(
         branch: String,
         path: String,
         pat: String?,
+        etags: MutableMap<String, String>? = null,
+        bodies: MutableMap<String, String>? = null,
     ): GitHubFileFetch {
         val url = buildContentsUrl(repoSlug, path, branch)
+        val cachedBody = bodies?.get(url)
+        val cachedEtag = if (!cachedBody.isNullOrBlank()) etags?.get(url) else null
         val builder = Request.Builder()
             .url(url)
             .header("Accept", GITHUB_ACCEPT)
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", USER_AGENT)
             .get()
+        if (!cachedEtag.isNullOrBlank()) {
+            builder.header("If-None-Match", cachedEtag)
+        }
         if (!pat.isNullOrBlank()) {
             builder.header("Authorization", "Bearer ${pat.trim()}")
         }
@@ -354,6 +368,10 @@ class NexusHubBridgeService(
             githubOkHttpClient.newCall(builder.build()).execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 when {
+                    response.code == 304 && !cachedBody.isNullOrBlank() -> GitHubFileFetch.Found(
+                        sha = "",
+                        contentUtf8 = cachedBody,
+                    )
                     response.code == 404 -> GitHubFileFetch.NotFound
                     !response.isSuccessful -> GitHubFileFetch.Error(
                         httpCode = response.code,
@@ -367,6 +385,8 @@ class NexusHubBridgeService(
                             )
                         val cleanedB64 = dto.content.orEmpty().replace("\n", "").replace("\r", "")
                         val decoded = String(Base64.decode(cleanedB64, Base64.DEFAULT), Charsets.UTF_8)
+                        response.header("ETag")?.let { etags?.put(url, it) }
+                        bodies?.put(url, decoded)
                         GitHubFileFetch.Found(
                             sha = dto.sha.orEmpty(),
                             contentUtf8 = decoded,
@@ -419,6 +439,8 @@ data class HubHandshakeResult(
     val pulledIndex: NexusClientCodestringIndex?,
     val changelogDiff: NexusHubChangelogDiff?,
     val checkedAtIso: String,
+    val updatedEtags: Map<String, String> = emptyMap(),
+    val updatedBodies: Map<String, String> = emptyMap(),
 )
 
 sealed class GitHubCommitResult {

@@ -5,10 +5,11 @@ import com.squareup.moshi.JsonClass
 
 /**
  * Pure Kotlin domain models for:
- * - nexus-app.json (Master Hub registration + Discord Lock + Admin Gate)
+ * - nexus-app.json (Master Hub registration + Private Play Store deep links + Discord Lock + Admin Gate)
  * - handshake-contract.json (Two-Way Handshake + Dual-Engine Update Consent)
  * - engine-sync-snapshot.json (Live Tcg-game-engine-test schemas & bounds)
  * - docs/engine-health-status.json (Signed Master Hub Notification Handshake payload)
+ * - InstalledCompanionAppInfo & AlignmentWarningEvaluation (Startup Alignment Warning Pop-Up)
  * - Card Frame Reviewer & Layer 20 Omnichroma 6 Bespoke Sacred Celestial Geometries
  */
 
@@ -35,8 +36,13 @@ data class NexusAppManifest(
     @Json(name = "category") val category: String = "TCG_TOOL",
     @Json(name = "launchType") val launchType: String = "ANDROID_APK_AND_WEB",
     @Json(name = "webUrl") val webUrl: String = "https://summer-warrior.github.io/MPV-TCG-Card-Making-Software-Updated/",
+    @Json(name = "androidPackageName") val androidPackageName: String = "com.aistudio.tcgstudio.kqrmvx",
+    @Json(name = "deepLinkScheme") val deepLinkScheme: String = "tcgstudio://nexus-hub",
+    @Json(name = "gameEngineAndroidPackage") val gameEngineAndroidPackage: String = "com.aistudio.nexustcg.vxqrmk",
+    @Json(name = "gameEngineDeepLinkScheme") val gameEngineDeepLinkScheme: String = "nexus-tcg-engine://open",
+    @Json(name = "distributionPolicy") val distributionPolicy: String = "GITHUB_RELEASES_PUBLIC_PLAY_STORE_PERSONAL_ONLY",
     @Json(name = "upstreamSourceLock") val upstreamSourceLock: Boolean = false,
-    @Json(name = "linkedMasterHub") val linkedMasterHub: String = "Summer-Warrior/Nexus-Master-Hub",
+    @Json(name = "linkedMasterHub") val linkedMasterHub: String = "Summer-Warrior/Project-MPV-RP-Master-Hub",
     @Json(name = "linkedGameEngineRepo") val linkedGameEngineRepo: String = "Summer-Warrior/Tcg-game-engine-test",
     @Json(name = "requiredDiscordLock") val requiredDiscordLock: DiscordLockConfig = DiscordLockConfig(),
     @Json(name = "masterHubAdminGate") val masterHubAdminGate: MasterHubAdminGate = MasterHubAdminGate(),
@@ -58,11 +64,11 @@ data class DualConsentRecord(
 
 @JsonClass(generateAdapter = true)
 data class HandshakeContract(
-    @Json(name = "contractVersion") val contractVersion: String = "1.0.0",
-    @Json(name = "expectedProtocolHash") val expectedProtocolHash: String = "sha256:tcg-dual-engine-handshake-v1",
+    @Json(name = "contractVersion") val contractVersion: String = "1.1.0",
+    @Json(name = "expectedProtocolHash") val expectedProtocolHash: String = "sha256:tcg-dual-engine-handshake-v1.1",
     @Json(name = "cardMakerRepo") val cardMakerRepo: String = "Summer-Warrior/MPV-TCG-Card-Making-Software-Updated",
     @Json(name = "gameEngineRepo") val gameEngineRepo: String = "Summer-Warrior/Tcg-game-engine-test",
-    @Json(name = "masterHubRepo") val masterHubRepo: String = "Summer-Warrior/Nexus-Master-Hub",
+    @Json(name = "masterHubRepo") val masterHubRepo: String = "Summer-Warrior/Project-MPV-RP-Master-Hub",
     @Json(name = "requiredEngineFiles") val requiredEngineFiles: List<String> = DEFAULT_REQUIRED_ENGINE_FILES,
     @Json(name = "requiredCapabilities") val requiredCapabilities: List<String> = DEFAULT_REQUIRED_CAPABILITIES,
     @Json(name = "dualConsentRule") val dualConsentRule: String = "NO_SCHEMA_SYNC_OR_EXPORT_MIGRATION_WITHOUT_BOTH_CONSENTED",
@@ -115,9 +121,9 @@ data class BigInt21Spec(
 
 @JsonClass(generateAdapter = true)
 data class FirestoreBoundsSpec(
-    @Json(name = "maxCardNameLength") val maxCardNameLength: Int = 120,
+    @Json(name = "maxCardNameLength") val maxCardNameLength: Int = 100,
     @Json(name = "maxCardTypeLength") val maxCardTypeLength: Int = 120,
-    @Json(name = "maxRulesTextLength") val maxRulesTextLength: Int = 2000,
+    @Json(name = "maxRulesTextLength") val maxRulesTextLength: Int = 1000,
     @Json(name = "maxDeckSize") val maxDeckSize: Int = 100,
     @Json(name = "maxZonePlacements") val maxZonePlacements: Int = 60,
     @Json(name = "maxCodeStringLength") val maxCodeStringLength: Int = 21,
@@ -153,30 +159,26 @@ data class EngineSchemaDefinitions(
         "descriptor",
     ),
     @Json(name = "turnPhases") val turnPhases: List<String> = listOf(
-        "UNTAP",
-        "UPKEEP",
         "DRAW",
         "STANDBY",
-        "MAIN_1",
+        "MAIN",
         "COMBAT",
-        "BATTLE",
-        "MAIN_2",
         "END",
     ),
     @Json(name = "cardEffectTypes") val cardEffectTypes: List<String> = listOf(
-        "ACTIVATED",
-        "TRIGGERED",
-        "CONTINUOUS",
-        "QUICK",
-        "END_TURN",
-        "EXTRA_TURN",
-        "STAT_MODIFIER_21",
+        "DIRECT_DAMAGE_BURN",
+        "LIFE_RESTORE_HEAL",
+        "ATK_DEF_BUFF",
+        "DRAW_CARDS",
+        "RESOURCE_RAMP",
+        "TARGET_DESTROY_REMOVAL",
+        "NEGATE_AND_COUNTER",
     ),
 )
 
 @JsonClass(generateAdapter = true)
 data class EngineSyncSnapshot(
-    @Json(name = "schemaVersion") val schemaVersion: String = "1.0.0",
+    @Json(name = "schemaVersion") val schemaVersion: String = "1.1.0",
     @Json(name = "engineRepo") val engineRepo: String = "Summer-Warrior/Tcg-game-engine-test",
     @Json(name = "engineBranch") val engineBranch: String = "main",
     @Json(name = "commitSha") val commitSha: String = "baseline-seed",
@@ -189,11 +191,20 @@ data class EngineSyncSnapshot(
     companion object {
         fun defaultBaseVariants(): List<EngineBaseVariantSpec> = listOf(
             EngineBaseVariantSpec(
+                baseVariantId = "ULTIMATE_TCG_WIP",
+                displayName = "Ultimate TCG (WIP Canonical)",
+                upstreamSourceLock = false,
+                zones = listOf("Main Deck", "Sub-Deck", "Battlefield", "Resource Pool", "Graveyard", "Exile"),
+                phases = listOf("DRAW", "STANDBY", "MAIN", "COMBAT", "END"),
+                resourceLabels = listOf("20-Color Pie", "LP / Life", "Register-21"),
+                scriptType = "HYBRID_LUA_SVAR",
+            ),
+            EngineBaseVariantSpec(
                 baseVariantId = "EDOPRO_CUSTOM_FORK",
                 displayName = "EDOPro Custom 21-Digit Fork",
                 upstreamSourceLock = false,
                 zones = listOf("Main Deck", "Extra Deck", "Monster Zone", "Spell/Trap Zone", "Field Zone", "Graveyard", "Banished"),
-                phases = listOf("DRAW", "STANDBY", "MAIN_1", "BATTLE", "MAIN_2", "END"),
+                phases = listOf("DRAW", "STANDBY", "MAIN", "COMBAT", "END"),
                 resourceLabels = listOf("LP", "Counters", "Register-21"),
                 scriptType = "LUA_21",
             ),
@@ -202,7 +213,7 @@ data class EngineSyncSnapshot(
                 displayName = "Forge Custom Planar Clone",
                 upstreamSourceLock = false,
                 zones = listOf("Library", "Hand", "Battlefield", "Stack", "Graveyard", "Exile", "Command"),
-                phases = listOf("UNTAP", "UPKEEP", "DRAW", "MAIN_1", "COMBAT", "MAIN_2", "END"),
+                phases = listOf("DRAW", "STANDBY", "MAIN", "COMBAT", "END"),
                 resourceLabels = listOf("20-Color Mana", "Life", "Energy"),
                 scriptType = "FORGE_SVAR",
             ),
@@ -211,7 +222,7 @@ data class EngineSyncSnapshot(
                 displayName = "Hybrid Forge x EDOPro Mix",
                 upstreamSourceLock = false,
                 zones = listOf("Main Deck", "Sub-Deck", "Battlefield", "Monster/Spell Zone", "Stack", "Graveyard", "Exile"),
-                phases = listOf("UNTAP", "DRAW", "STANDBY", "MAIN_1", "BATTLE", "MAIN_2", "END"),
+                phases = listOf("DRAW", "STANDBY", "MAIN", "COMBAT", "END"),
                 resourceLabels = listOf("LP / Life", "20-Color Pie", "Register-21"),
                 scriptType = "HYBRID_LUA_SVAR",
             ),
@@ -265,6 +276,31 @@ data class EngineCommitDiff(
             boundsChanged
 }
 
+data class InstalledCompanionAppInfo(
+    val packageName: String = "com.aistudio.nexustcg.vxqrmk",
+    val isInstalled: Boolean = false,
+    val versionName: String? = null,
+    val versionCode: Long? = null,
+    val canHandleDeepLink: Boolean = false,
+) {
+    val summaryLabel: String
+        get() = if (isInstalled) {
+            "Installed (${versionName ?: "?"} / code ${versionCode ?: 0L})"
+        } else {
+            "Not Installed on this device"
+        }
+}
+
+data class AlignmentWarningEvaluation(
+    val shouldShowPopup: Boolean,
+    val alignmentKey: String,
+    val reasons: List<String>,
+    val engineHealthSeverity: String,
+    val mutualLinkStatus: MutualLinkStatus,
+    val consentMismatched: Boolean,
+    val failingCommitSha: String,
+)
+
 data class CardFrameAuditIssue(
     val code: String,
     val message: String,
@@ -274,6 +310,7 @@ data class CardFrameAuditIssue(
 data class CardFrameReviewAuditResult(
     val isCompatible: Boolean,
     val sanitizedDescriptor: String,
+    val legacyDescriptor: String = "",
     val generatedLuaScript: String,
     val generatedForgeSvarScript: String,
     val generatedHybridScript: String,
@@ -309,5 +346,5 @@ object OmnichromaSacredCatalog {
         OmnichromaGeometrySpec("{Ω·A}", "Solar Astrolabe", SacredCelestialShape.SOLAR_ASTROLABE),
     )
 
-    val validCodes: Set<String> = sixSacredGeometries.map { it.code }.toSet()
+    val validCodes: Set<String> = (sixSacredGeometries.map { it.code } + "{Ω}").toSet()
 }

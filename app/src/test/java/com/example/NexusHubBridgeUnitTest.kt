@@ -28,6 +28,7 @@ class NexusHubBridgeUnitTest {
     @Test
     fun canonicalRepoLinkManifestPassesRuntimeSchemaValidation() {
         val manifest = NexusRepoLinkManifest()
+        assertEquals("Summer-Warrior/Project-MPV-RP-Master-Hub", manifest.linkedHubRepo)
         val result = NexusSchemaValidator.validateRepoLinkManifest(manifest)
         assertTrue(result is SchemaValidationResult.Valid)
 
@@ -126,25 +127,48 @@ class NexusHubBridgeUnitTest {
             initialUi.selectedColorPiePips.isEmpty(),
         )
         assertEquals(20, TwentyColorPieCatalog.baseTwentyColors.size)
+        assertEquals(
+            listOf("W", "Iv", "Cy", "Az", "U", "In", "Vi", "Ob", "B", "Cr", "Mg", "Sc", "R", "Or", "Am", "Ch", "G", "Ja", "Te", "Aq"),
+            TwentyColorPieCatalog.baseTwentyColors.map { it.code.removeSurrounding("{", "}") },
+        )
+        assertEquals(6, TwentyColorPieCatalog.layer20OmegaPips.size)
 
         val validPips = listOf(
             "{C}",
             "{W}",
+            "{Iv}",
+            "{Az}",
+            "{Vi}",
+            "{Sc}",
+            "{Or}",
+            "{Am}",
+            "{Ch}",
+            "{Ja}",
             "{Aq}",
             "{W:T}",
             "{Ob:S}",
-            "{Gd:M}",
+            "{Am:M}",
             "{W·Aq}",
             "{W:T·U:S}",
             "{R/G}",
+            "{W|B}",
+            "{R>G}",
             "{2Cr/Ob}",
+            "{-R}",
+            "{-(W,B)}",
+            "{Ω}",
             "{Ω·M}",
+            "{Ω·C}",
+            "{Ω·S}",
+            "{Ω·V}",
             "{Ω·E}",
+            "{Ω·A}",
         )
         validPips.forEach { pip ->
             assertTrue("Expected valid canonical pip '$pip'", CardCodeValidator.isValidColorPiePip(pip))
         }
         assertFalse(CardCodeValidator.isValidColorPiePip("{ZZ}"))
+        assertFalse(CardCodeValidator.isValidColorPiePip("{Gd:M}"))
         assertFalse(CardCodeValidator.isValidColorPiePip("{W:X}"))
     }
 

@@ -25,7 +25,8 @@ import java.net.URLEncoder
  *
  * Reads live metadata, latest commit SHA, and source schemas directly from
  * `Summer-Warrior/Tcg-game-engine-test` via GitHub REST API with ETag caching
- * (`If-None-Match`) and graceful offline fallback to the last verified cached snapshot.
+ * (`If-None-Match`) and persisted file-content caching so HTTP `304 Not Modified`
+ * passes real cached source files to the auditor without triggering false alerts.
  */
 class EngineSyncIngestionService(
     private val okHttpClient: OkHttpClient,
@@ -43,9 +44,12 @@ class EngineSyncIngestionService(
         baselineSnapshot: EngineSyncSnapshot,
         engineBranch: String,
         cachedEtags: Map<String, String>,
-        fineGrainedPat: String?,
+        cachedFileContents: Map<String, String> = emptyMap(),
+        fineGrainedPat: String? = null,
     ): LiveEngineIngestionResult = withContext(Dispatchers.IO) {
         val updatedEtags = cachedEtags.toMutableMap()
+        val updatedCachedFiles = cachedFileContents.toMutableMap()
+        val unchanged304Files = mutableSetOf<String>()
         val engineRepo = contract.gameEngineRepo.trim()
 
         // 1. Fetch latest branch commit SHA with ETag caching
@@ -81,9 +85,10 @@ class EngineSyncIngestionService(
             val fallbackHealth = EngineCompatibilityAuditor.runBenefitIntegrityAudit(
                 contract = contract,
                 commitSha = baselineSnapshot.commitSha,
-                fetchedFiles = emptyMap(),
+                fetchedFiles = updatedCachedFiles,
                 missingFiles = emptyList(),
                 remoteEngineConsentStatus = contract.gameEngineConsent.status,
+                unchanged304Files = updatedCachedFiles.keys,
             )
             return@withContext LiveEngineIngestionResult(
                 latestCommitSha = baselineSnapshot.commitSha,
@@ -92,30 +97,53 @@ class EngineSyncIngestionService(
                 healthStatus = fallbackHealth,
                 remoteEngineContract = null,
                 updatedEtags = updatedEtags,
+                updatedCachedFiles = updatedCachedFiles,
+                unchanged304Files = unchanged304Files,
+                missingFiles = emptyList(),
                 usedOfflineFallback = true,
                 statusMessage = statusMessage,
             )
         }
 
-        // 2. Fetch required engine files from Tcg-game-engine-test
+        // 2. Fetch required engine files from Tcg-game-engine-test with real cached body reuse on 304
         val fetchedFiles = mutableMapOf<String, String>()
         val missingFiles = mutableListOf<String>()
 
         contract.requiredEngineFiles.forEach { relPath ->
             val fileUrl = buildContentsUrl(engineRepo, relPath, engineBranch)
-            when (val res = fetchWithEtag(fileUrl, cachedEtags[fileUrl], fineGrainedPat)) {
+            val existingBody = updatedCachedFiles[relPath]
+            // Only send If-None-Match if we actually have the cached content body on disk
+            val etagToSend = if (!existingBody.isNullOrBlank()) cachedEtags[fileUrl] else null
+
+            when (val res = fetchWithEtag(fileUrl, etagToSend, fineGrainedPat)) {
                 is EtagResponse.Ok -> {
                     res.etag?.let { updatedEtags[fileUrl] = it }
                     val decoded = decodeGitHubFileBody(res.body)
                     if (decoded != null) {
                         fetchedFiles[relPath] = decoded
+                        updatedCachedFiles[relPath] = decoded
                     } else {
                         missingFiles += relPath
                     }
                 }
                 is EtagResponse.NotModified -> {
-                    // File unchanged since last ETag check
-                    fetchedFiles[relPath] = "/* ETAG_304_UNCHANGED */"
+                    unchanged304Files += relPath
+                    if (!existingBody.isNullOrBlank()) {
+                        fetchedFiles[relPath] = existingBody
+                    } else {
+                        // Safety fallback: re-fetch cleanly without ETag if cache body was missing
+                        when (val cleanRes = fetchWithEtag(fileUrl, null, fineGrainedPat)) {
+                            is EtagResponse.Ok -> {
+                                cleanRes.etag?.let { updatedEtags[fileUrl] = it }
+                                val decoded = decodeGitHubFileBody(cleanRes.body)
+                                if (decoded != null) {
+                                    fetchedFiles[relPath] = decoded
+                                    updatedCachedFiles[relPath] = decoded
+                                }
+                            }
+                            else -> Unit
+                        }
+                    }
                 }
                 is EtagResponse.Error -> {
                     missingFiles += "$relPath (HTTP ${res.httpCode ?: 0})"
@@ -142,13 +170,14 @@ class EngineSyncIngestionService(
         )
         val diff = EngineCompatibilityAuditor.computeEngineDiff(baselineSnapshot, stagedSnapshot)
 
-        // 5. Run Benefit-Integrity Compatibility Audit
+        // 5. Run Benefit-Integrity Compatibility Audit (passes real cached bodies + unchanged304Files)
         val healthStatus = EngineCompatibilityAuditor.runBenefitIntegrityAudit(
             contract = contract,
             commitSha = latestSha,
             fetchedFiles = fetchedFiles,
             missingFiles = missingFiles,
             remoteEngineConsentStatus = remoteContract?.gameEngineConsent?.status,
+            unchanged304Files = unchanged304Files,
         )
 
         LiveEngineIngestionResult(
@@ -158,6 +187,9 @@ class EngineSyncIngestionService(
             healthStatus = healthStatus,
             remoteEngineContract = remoteContract,
             updatedEtags = updatedEtags,
+            updatedCachedFiles = updatedCachedFiles,
+            unchanged304Files = unchanged304Files,
+            missingFiles = missingFiles,
             usedOfflineFallback = false,
             statusMessage = statusMessage,
         )
@@ -165,7 +197,7 @@ class EngineSyncIngestionService(
 
     /**
      * Channel 1: Sends formal `repository_dispatch` (`nexus_engine_breaking_alert`)
-     * Notification Handshake to `Summer-Warrior/Nexus-Master-Hub`.
+     * Notification Handshake to `Summer-Warrior/Project-MPV-RP-Master-Hub`.
      */
     suspend fun dispatchMasterHubBreakingAlert(
         masterHubRepo: String,
@@ -404,6 +436,9 @@ data class LiveEngineIngestionResult(
     val healthStatus: EngineHealthStatusPayload,
     val remoteEngineContract: HandshakeContract?,
     val updatedEtags: Map<String, String>,
+    val updatedCachedFiles: Map<String, String> = emptyMap(),
+    val unchanged304Files: Set<String> = emptySet(),
+    val missingFiles: List<String> = emptyList(),
     val usedOfflineFallback: Boolean,
     val statusMessage: String,
 )

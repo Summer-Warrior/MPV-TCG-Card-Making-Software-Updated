@@ -19,6 +19,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +29,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -37,8 +41,9 @@ import androidx.compose.ui.platform.LocalContext
 import com.example.ui.diagnostics.BridgeDiagnosticsScreen
 import com.example.ui.diagnostics.BridgeDiagnosticsSheet
 import com.example.ui.fonts.FontsScreen
-import com.example.ui.nexus.AdminBreakingChangeAlertModal
+import com.example.ui.nexus.AlignmentWarningDialog
 import com.example.ui.nexus.EngineSyncViewModel
+import com.example.ui.nexus.NEXUS_TAB_ENGINE_SYNC
 import com.example.ui.nexus.NexusHubSyncScreen
 import com.example.ui.nexus.NexusHubViewModel
 import com.example.ui.theme.TcgStudioTheme
@@ -46,6 +51,12 @@ import com.example.ui.upstream.UpstreamScreen
 import com.example.ui.welcome.WelcomeScreen
 import com.example.ui.workspace.SetWorkspaceScreen
 import kotlinx.coroutines.launch
+
+data class HubDeepLinkRequest(
+    val hubSync: Boolean = false,
+    val exportClientInfo: Boolean = false,
+    val fromApp: String? = null,
+)
 
 object StudioRoutes {
     const val WELCOME = "mse_welcome"
@@ -65,8 +76,8 @@ fun TcgStudioApp(
     viewModel: StudioViewModel,
     nexusHubViewModel: NexusHubViewModel,
     engineSyncViewModel: EngineSyncViewModel,
-    pendingHubSyncHandshake: Boolean = false,
-    onHubSyncHandshakeConsumed: () -> Unit = {},
+    pendingHubDeepLink: HubDeepLinkRequest? = null,
+    onHubDeepLinkConsumed: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -99,6 +110,24 @@ fun TcgStudioApp(
     val snackbarHostState = remember { SnackbarHostState() }
     val uiScope = androidx.compose.runtime.rememberCoroutineScope()
     var showBridgeSheet by remember { mutableStateOf(false) }
+    var requestedHubTabIndex by remember { mutableStateOf<Int?>(null) }
+    var pendingAutoSync by remember { mutableStateOf(false) }
+
+    fun copyPlainText(label: String, text: String, snackbarMessage: String) {
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(label, text))
+        uiScope.launch { snackbarHostState.showSnackbar(snackbarMessage) }
+    }
+
+    fun launchNexusTcgHandshake() {
+        val intent = engineSyncViewModel.buildNexusTcgHandshakeIntent()
+        runCatching { context.startActivity(intent) }
+            .onFailure {
+                uiScope.launch {
+                    snackbarHostState.showSnackbar("NexusTCG app (com.aistudio.nexustcg.vxqrmk) is not installed on this device.")
+                }
+            }
+    }
 
     LaunchedEffect(Unit) {
         launch {
@@ -118,12 +147,68 @@ fun TcgStudioApp(
         }
     }
 
-    LaunchedEffect(pendingHubSyncHandshake) {
-        if (pendingHubSyncHandshake) {
-            navController.navigate(StudioRoutes.NEXUS_HUB) {
-                launchSingleTop = true
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var hasCompletedFirstResume by remember { mutableStateOf(false) }
+
+    // Re-run lightweight ETag-cached cross-repo checks whenever the user reopens the installed app
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (!hasCompletedFirstResume) {
+                    hasCompletedFirstResume = true
+                } else {
+                    engineSyncViewModel.refreshCompanionAppStatus()
+                    engineSyncViewModel.syncLiveGameEngine(fineGrainedPat = null, isManualRefresh = false)
+                    nexusHubViewModel.verifyMutualLinkAndCheckHub(silent = true)
+                }
             }
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Automatic on-open cross-repository alignment evaluation (Engine + Master Hub + Dual-Engine Consent)
+    LaunchedEffect(
+        nexusHubState.linkStatus,
+        nexusHubState.hasCheckedHubLink,
+        engineSyncState.healthStatus,
+        engineSyncState.contract,
+        engineSyncState.stagedSnapshot,
+        engineSyncState.hasCompletedStartupSync,
+        engineSyncState.adminLocalState.dismissedAlignmentKeys,
+    ) {
+        engineSyncViewModel.reevaluateAlignmentWarning(
+            mutualLinkStatus = nexusHubState.linkStatus,
+            hasCheckedHubLink = nexusHubState.hasCheckedHubLink,
+        )
+    }
+
+    // Handle tcgstudio://nexus-hub?hubSync=1&exportClientInfo=1&from=nexustcg
+    LaunchedEffect(pendingHubDeepLink) {
+        val req = pendingHubDeepLink ?: return@LaunchedEffect
+        if (req.hubSync) {
+            pendingAutoSync = true
+            requestedHubTabIndex = NEXUS_TAB_ENGINE_SYNC
+        }
+        if (req.exportClientInfo) {
+            val exportPayload = buildString {
+                appendLine("{")
+                appendLine("  \"nexusApp\": ${engineSyncViewModel.buildAppManifestJson()},")
+                appendLine("  \"nexusRepoLink\": ${nexusHubViewModel.buildManifestJson()}")
+                append("}")
+            }
+            copyPlainText(
+                label = "tcgstudio-client-info.json",
+                text = exportPayload,
+                snackbarMessage = "Exported client info (nexus-app.json + nexus-repo-link.json) to clipboard.",
+            )
+        } else if (req.fromApp != null) {
+            snackbarHostState.showSnackbar("Cross-app handshake opened from ${req.fromApp}.")
+        }
+        navController.navigate(StudioRoutes.NEXUS_HUB) {
+            launchSingleTop = true
+        }
+        onHubDeepLinkConsumed()
     }
 
     fun openWorkspace() {
@@ -318,15 +403,18 @@ fun TcgStudioApp(
                             uiState = nexusHubState,
                             engineSyncState = engineSyncState,
                             engineSyncViewModel = engineSyncViewModel,
-                            autoTriggerSync = pendingHubSyncHandshake,
+                            autoTriggerSync = pendingAutoSync,
+                            requestedTabIndex = requestedHubTabIndex,
                             activeMseCardName = activeCard?.name,
                             activeMseCardType = activeCard?.fullTypeLine,
                             activeMseCardRules = activeCard?.ruleText,
                             activeFrameWidthPx = styleSpec.cardWidthPx,
                             activeFrameHeightPx = styleSpec.cardHeightPx,
-                            onAutoSyncConsumed = onHubSyncHandshakeConsumed,
+                            onAutoSyncConsumed = { pendingAutoSync = false },
+                            onTabRequestConsumed = { requestedHubTabIndex = null },
+                            onLaunchNexusTcgApp = ::launchNexusTcgHandshake,
                             onSaveManifest = nexusHubViewModel::updateManifest,
-                            onVerifyAndPullHub = nexusHubViewModel::verifyMutualLinkAndCheckHub,
+                            onVerifyAndPullHub = { nexusHubViewModel.verifyMutualLinkAndCheckHub(silent = false) },
                             onApplyPendingDiff = nexusHubViewModel::applyPendingHubIndexUpdate,
                             onDismissPendingDiff = nexusHubViewModel::dismissPendingHubDiff,
                             onSelectClient = nexusHubViewModel::selectClient,
@@ -359,30 +447,42 @@ fun TcgStudioApp(
             )
         }
 
-        // High-Priority Blocking Alert Modal shown EXCLUSIVELY to Master Hub Admins
-        if (engineSyncState.showAdminBlockingModal && engineSyncState.isCurrentUserAdmin) {
-            AdminBreakingChangeAlertModal(
+        // Automatic On-Open Alignment & Update Warning Pop-Up (visible to all users; Admin actions strictly gated)
+        val alignmentWarning = engineSyncState.alignmentWarning
+        if (alignmentWarning != null && alignmentWarning.shouldShowPopup) {
+            AlignmentWarningDialog(
+                evaluation = alignmentWarning,
                 healthStatus = engineSyncState.healthStatus,
-                onPauseSync = { engineSyncViewModel.pauseOrResumeSync(true) },
-                onInspectDiff = {
-                    engineSyncViewModel.dismissAdminBlockingModal()
+                contract = engineSyncState.contract,
+                missingEngineFiles = engineSyncState.missingEngineFiles,
+                stagedDiff = engineSyncState.stagedDiff,
+                companionEngineApp = engineSyncState.companionEngineApp,
+                isCurrentUserAdmin = engineSyncState.isCurrentUserAdmin,
+                onOpenHandshakeArea = {
+                    engineSyncViewModel.hideAlignmentWarningTemporarily()
+                    requestedHubTabIndex = NEXUS_TAB_ENGINE_SYNC
                     navController.navigate(StudioRoutes.NEXUS_HUB) { launchSingleTop = true }
                 },
-                onExportDiagnosticReport = {
-                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    clipboard.setPrimaryClip(
-                        android.content.ClipData.newPlainText(
-                            "engine-health-status.json",
-                            engineSyncViewModel.buildDiagnosticReportJson(),
-                        )
-                    )
-                    uiScope.launch { snackbarHostState.showSnackbar("Copied signed engine-health-status.json diagnostic report.") }
+                onLaunchNexusTcgApp = {
+                    engineSyncViewModel.hideAlignmentWarningTemporarily()
+                    launchNexusTcgHandshake()
                 },
-                onLaunchMailto = {
+                onExportDiagnosticReport = {
+                    copyPlainText(
+                        label = "engine-health-status.json",
+                        text = engineSyncViewModel.buildDiagnosticReportJson(),
+                        snackbarMessage = "Copied signed engine-health-status.json diagnostic report.",
+                    )
+                },
+                onDismissForSha = engineSyncViewModel::dismissAlignmentWarningForCurrentSha,
+                onHideTemporarily = engineSyncViewModel::hideAlignmentWarningTemporarily,
+                onAdminPauseSync = { engineSyncViewModel.pauseOrResumeSync(true) },
+                onAdminSendDiscordWebhook = engineSyncViewModel::sendDiscordWebhookOnly,
+                onAdminSendEmailRelay = engineSyncViewModel::sendAdminEmailRelayOnly,
+                onAdminLaunchMailto = {
                     val mailIntent = Intent(Intent.ACTION_SENDTO, engineSyncViewModel.buildMailtoEscalationUri())
                     runCatching { context.startActivity(mailIntent) }
                 },
-                onDismiss = engineSyncViewModel::dismissAdminBlockingModal,
             )
         }
     }

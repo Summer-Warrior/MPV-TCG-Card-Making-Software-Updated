@@ -1,9 +1,9 @@
 {
-  "contractVersion": "1.0.0",
-  "expectedProtocolHash": "sha256:tcg-dual-engine-handshake-v1",
+  "contractVersion": "1.1.0",
+  "expectedProtocolHash": "sha256:tcg-dual-engine-handshake-v1.1",
   "cardMakerRepo": "Summer-Warrior/MPV-TCG-Card-Making-Software-Updated",
   "gameEngineRepo": "Summer-Warrior/Tcg-game-engine-test",
-  "masterHubRepo": "Summer-Warrior/Nexus-Master-Hub",
+  "masterHubRepo": "Summer-Warrior/Project-MPV-RP-Master-Hub",
   "requiredEngineFiles": [
     "firebase-blueprint.json",
     "firestore.rules",

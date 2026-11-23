@@ -60,9 +60,10 @@ object CardCodeValidator {
         "filter 21",
     )
 
-    // Validates canonical 20-Color Pie pips:
-    // {C}, {W}..{Aq}, Layer 2 fused {W·U}, Value states :T/:S/:M, Choice splits {W/U},
-    // Weighted leads {2W/U}, and Layer 20 {Ω·M}..{Ω·E}
+    // Validates unified canonical 20-Color Pie pips:
+    // {C}, {W}..{Aq} (with optional :T/:S/:M), fused pairs {A·B} & {A/B}, choice splits {A|B},
+    // crowned/weighted leads {A>B} & {2A/B} & {2A·B}, Layer 19 {-X}, Layer 18 {-(A,B)},
+    // and Layer 20 Omnichroma {Ω} + all 6 sacred geometries {Ω·M}..{Ω·A}
     private val COLOR_SYMBOL_PATTERN =
         TwentyColorPieCatalog.baseSymbols
             .sortedByDescending { it.length }
@@ -76,7 +77,12 @@ object CardCodeValidator {
             "|\\{$ATOM_PATTERN\\}" +
             "|\\{$ATOM_PATTERN·$ATOM_PATTERN\\}" +
             "|\\{$ATOM_PATTERN/$ATOM_PATTERN\\}" +
-            "|\\{[2-9]$ATOM_PATTERN/$ATOM_PATTERN\\}" +
+            "|\\{$ATOM_PATTERN\\|$ATOM_PATTERN\\}" +
+            "|\\{$ATOM_PATTERN>$ATOM_PATTERN\\}" +
+            "|\\{[2-9]$ATOM_PATTERN[·/]$ATOM_PATTERN\\}" +
+            "|\\{-$ATOM_PATTERN\\}" +
+            "|\\{-\\($ATOM_PATTERN,$ATOM_PATTERN\\)\\}" +
+            "|\\{Ω\\}" +
             "|\\{Ω·[MCSVEA]\\}" +
             ")$"
     )

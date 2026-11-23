@@ -1,5 +1,6 @@
 package com.example.ui.nexus
 
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -8,7 +9,9 @@ import com.example.core.AppContainer
 import com.example.data.nexus.AdminAlertLocalState
 import com.example.data.nexus.EngineSyncIngestionService
 import com.example.data.nexus.EngineSyncRepository
+import com.example.data.nexus.InstalledAppsBridge
 import com.example.data.nexus.NotificationChannelResult
+import com.example.domain.nexus.AlignmentWarningEvaluation
 import com.example.domain.nexus.CardEditorMode
 import com.example.domain.nexus.CardFrameReviewAuditResult
 import com.example.domain.nexus.ConsentStatus
@@ -19,7 +22,9 @@ import com.example.domain.nexus.EngineHealthSeverity
 import com.example.domain.nexus.EngineHealthStatusPayload
 import com.example.domain.nexus.EngineSyncSnapshot
 import com.example.domain.nexus.HandshakeContract
+import com.example.domain.nexus.InstalledCompanionAppInfo
 import com.example.domain.nexus.MasterHubAdminGate
+import com.example.domain.nexus.MutualLinkStatus
 import com.example.domain.nexus.NexusAppManifest
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,19 +49,22 @@ data class EngineSyncUiState(
         alertId = "baseline-healthy",
         severity = EngineHealthSeverity.HEALTHY.wireValue,
     ),
+    val missingEngineFiles: List<String> = emptyList(),
     val adminLocalState: AdminAlertLocalState = AdminAlertLocalState(),
+    val companionEngineApp: InstalledCompanionAppInfo = InstalledCompanionAppInfo(),
     val isSyncingEngine: Boolean = false,
-    val lastSyncMessage: String = "Baseline loaded. Tap Sync to read live Tcg-game-engine-test.",
-    val showAdminBlockingModal: Boolean = false,
+    val hasCompletedStartupSync: Boolean = false,
+    val lastSyncMessage: String = "Baseline loaded. Checking live Tcg-game-engine-test…",
+    val alignmentWarning: AlignmentWarningEvaluation? = null,
     val lastNotificationResults: List<NotificationChannelResult> = emptyList(),
     // Card Frame Reviewer state — strictly ZERO default 20-Color Pie colors selected
-    val reviewBaseVariantId: String = "EDOPRO_CUSTOM_FORK",
+    val reviewBaseVariantId: String = "ULTIMATE_TCG_WIP",
     val reviewCardName: String = "",
     val reviewCardType: String = "",
     val reviewRulesText: String = "",
     val reviewCodeString: String = "",
     val reviewStatText: String = "",
-    val reviewEffectType: String = "ACTIVATED",
+    val reviewEffectType: String = "DIRECT_DAMAGE_BURN",
     val reviewEditorMode: CardEditorMode = CardEditorMode.MATCH_GAMEPLAY,
     val reviewFlavorFilters: Set<Int> = emptySet(),
     val reviewSelectedPips: List<String> = emptyList(),
@@ -86,6 +94,7 @@ data class EngineSyncUiState(
 class EngineSyncViewModel(
     private val repository: EngineSyncRepository,
     private val ingestionService: EngineSyncIngestionService,
+    private val installedAppsBridge: InstalledAppsBridge,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(EngineSyncUiState())
@@ -94,6 +103,8 @@ class EngineSyncViewModel(
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
+    private var cachedEngineFiles: Map<String, String> = emptyMap()
+
     init {
         viewModelScope.launch {
             val appManifest = repository.loadAppManifest()
@@ -101,6 +112,8 @@ class EngineSyncViewModel(
             val baseline = repository.loadBaselineSnapshot()
             val lastHealth = repository.loadLastHealthStatus()
             val adminState = repository.loadAdminAlertState()
+            cachedEngineFiles = repository.loadCachedEngineFiles()
+            val companion = installedAppsBridge.detectNexusTcgClient()
 
             _uiState.update { state ->
                 state.copy(
@@ -109,18 +122,29 @@ class EngineSyncViewModel(
                     baselineSnapshot = baseline,
                     healthStatus = lastHealth ?: state.healthStatus,
                     adminLocalState = adminState,
-                    reviewBaseVariantId = baseline.baseVariants.firstOrNull()?.baseVariantId ?: "EDOPRO_CUSTOM_FORK",
+                    companionEngineApp = companion,
+                    reviewBaseVariantId = baseline.baseVariants.firstOrNull()?.baseVariantId ?: "ULTIMATE_TCG_WIP",
+                    reviewEffectType = baseline.schemaDefinitions.cardEffectTypes.firstOrNull() ?: "DIRECT_DAMAGE_BURN",
                 )
             }
             recomputeFrameReview()
             // Run live engine compatibility check automatically on launch unless paused
             if (!adminState.syncPaused) {
-                syncLiveGameEngine(fineGrainedPat = null)
+                syncLiveGameEngine(fineGrainedPat = null, isManualRefresh = false)
+            } else {
+                _uiState.update { it.copy(hasCompletedStartupSync = true) }
             }
         }
     }
 
-    fun syncLiveGameEngine(fineGrainedPat: String?) {
+    fun refreshCompanionAppStatus() {
+        val companion = installedAppsBridge.detectNexusTcgClient()
+        _uiState.update { it.copy(companionEngineApp = companion) }
+    }
+
+    fun buildNexusTcgHandshakeIntent(): Intent = installedAppsBridge.buildNexusTcgHandshakeIntent()
+
+    fun syncLiveGameEngine(fineGrainedPat: String?, isManualRefresh: Boolean = true) {
         val current = _uiState.value
         if (current.isSyncingEngine) return
         if (current.adminLocalState.syncPaused) {
@@ -130,13 +154,18 @@ class EngineSyncViewModel(
 
         viewModelScope.launch {
             _uiState.update { it.copy(isSyncingEngine = true) }
+            val companion = installedAppsBridge.detectNexusTcgClient()
             val result = ingestionService.ingestLiveEngineAndAudit(
                 contract = current.contract,
                 baselineSnapshot = current.baselineSnapshot,
                 engineBranch = current.baselineSnapshot.engineBranch,
                 cachedEtags = current.adminLocalState.etags,
+                cachedFileContents = cachedEngineFiles,
                 fineGrainedPat = fineGrainedPat,
             )
+
+            cachedEngineFiles = result.updatedCachedFiles
+            repository.saveCachedEngineFiles(cachedEngineFiles)
 
             // Merge remote gameEngineConsent if published in Tcg-game-engine-test
             val mergedContract = if (result.remoteEngineContract != null) {
@@ -147,24 +176,31 @@ class EngineSyncViewModel(
             repository.saveContract(mergedContract)
             repository.saveHealthStatus(result.healthStatus)
 
-            val updatedAdminState = current.adminLocalState.copy(etags = result.updatedEtags)
+            // On manual refresh, allow previously dismissed warnings to re-surface if still misaligned
+            val updatedAdminState = current.adminLocalState.copy(
+                etags = result.updatedEtags,
+                dismissedAlignmentKeys = if (isManualRefresh) emptyList() else current.adminLocalState.dismissedAlignmentKeys,
+            )
             repository.saveAdminAlertState(updatedAdminState)
 
             val hasStagedChanges = result.diff.hasDiff && !result.usedOfflineFallback
             _uiState.update { state ->
                 state.copy(
                     isSyncingEngine = false,
+                    hasCompletedStartupSync = true,
+                    companionEngineApp = companion,
                     contract = mergedContract,
                     stagedSnapshot = if (hasStagedChanges) result.stagedSnapshot else state.stagedSnapshot,
                     stagedDiff = if (hasStagedChanges) result.diff else state.stagedDiff,
                     healthStatus = result.healthStatus,
+                    missingEngineFiles = result.missingFiles,
                     adminLocalState = updatedAdminState,
                     lastSyncMessage = result.statusMessage,
                 )
             }
             recomputeFrameReview()
 
-            // Trigger deduplicated Tri-Channel Admin Notifications + Master Hub Handshake on DEGRADED/BREAKING
+            // Trigger deduplicated external Tri-Channel Admin Notifications on DEGRADED/BREAKING
             val severity = result.healthStatus.severity
             if (severity == EngineHealthSeverity.DEGRADED.wireValue ||
                 severity == EngineHealthSeverity.BREAKING_INCOMPATIBLE.wireValue
@@ -175,6 +211,53 @@ class EngineSyncViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * Evaluates whether the non-hidden Alignment & Update Warning Pop-Up should be shown
+     * based on live engine health, mutual Hub link status, and Dual-Engine Consent parity.
+     * Deliberately NOT hidden behind empty admin gate lists; destructive actions inside the
+     * dialog remain strictly gated to verified Master Hub Admins.
+     */
+    fun reevaluateAlignmentWarning(
+        mutualLinkStatus: MutualLinkStatus,
+        hasCheckedHubLink: Boolean,
+    ) {
+        val state = _uiState.value
+        if (!state.hasCompletedStartupSync && !hasCheckedHubLink) return
+        val evaluation = EngineCompatibilityAuditor.evaluateAlignmentWarning(
+            healthStatus = state.healthStatus,
+            mutualLinkStatus = mutualLinkStatus,
+            hasCheckedHubLink = hasCheckedHubLink,
+            contract = state.contract,
+            stagedSnapshot = state.stagedSnapshot,
+            dismissedAlignmentKeys = state.adminLocalState.dismissedAlignmentKeys.toSet(),
+        )
+        _uiState.update { it.copy(alignmentWarning = evaluation) }
+    }
+
+    fun dismissAlignmentWarningForCurrentSha() {
+        val state = _uiState.value
+        val key = state.alignmentWarning?.alignmentKey.orEmpty()
+        if (key.isBlank()) {
+            _uiState.update { it.copy(alignmentWarning = it.alignmentWarning?.copy(shouldShowPopup = false)) }
+            return
+        }
+        viewModelScope.launch {
+            val nextKeys = (state.adminLocalState.dismissedAlignmentKeys + key).distinct().takeLast(50)
+            val nextLocal = state.adminLocalState.copy(dismissedAlignmentKeys = nextKeys)
+            repository.saveAdminAlertState(nextLocal)
+            _uiState.update {
+                it.copy(
+                    adminLocalState = nextLocal,
+                    alignmentWarning = it.alignmentWarning?.copy(shouldShowPopup = false),
+                )
+            }
+        }
+    }
+
+    fun hideAlignmentWarningTemporarily() {
+        _uiState.update { it.copy(alignmentWarning = it.alignmentWarning?.copy(shouldShowPopup = false)) }
     }
 
     private suspend fun triggerDeduplicatedAdminAlertPipeline(
@@ -226,13 +309,10 @@ class EngineSyncViewModel(
         val nextAdminState = state.adminLocalState.copy(alertedCommitShas = nextAlerted)
         repository.saveAdminAlertState(nextAdminState)
 
-        // Channel 2: High-priority Blocking Pop-Up strictly gated to Master Hub Admin Roles/IDs/Emails
-        val showModal = state.isCurrentUserAdmin
         _uiState.update {
             it.copy(
                 adminLocalState = nextAdminState,
                 lastNotificationResults = results,
-                showAdminBlockingModal = showModal,
             )
         }
     }
@@ -300,15 +380,11 @@ class EngineSyncViewModel(
             _uiState.update {
                 it.copy(
                     adminLocalState = next,
-                    showAdminBlockingModal = if (paused) false else it.showAdminBlockingModal,
+                    alignmentWarning = if (paused) it.alignmentWarning?.copy(shouldShowPopup = false) else it.alignmentWarning,
                 )
             }
             _messages.tryEmit(if (paused) "Engine sync paused by Admin." else "Engine sync resumed.")
         }
-    }
-
-    fun dismissAdminBlockingModal() {
-        _uiState.update { it.copy(showAdminBlockingModal = false) }
     }
 
     fun updateAdminGateAndRelays(
@@ -350,6 +426,10 @@ class EngineSyncViewModel(
 
     fun dispatchManualAdminNotifications(fineGrainedPat: String?) {
         val state = _uiState.value
+        if (!state.isCurrentUserAdmin) {
+            _messages.tryEmit("Admin Gate: External webhook/email escalation requires a verified Master Hub Admin identity.")
+            return
+        }
         viewModelScope.launch {
             val results = mutableListOf<NotificationChannelResult>()
             if (!fineGrainedPat.isNullOrBlank()) {
@@ -380,6 +460,40 @@ class EngineSyncViewModel(
         }
     }
 
+    fun sendDiscordWebhookOnly() {
+        val state = _uiState.value
+        if (!state.isCurrentUserAdmin) {
+            _messages.tryEmit("Admin Gate: Discord Admin Webhook requires a verified Master Hub Admin.")
+            return
+        }
+        viewModelScope.launch {
+            val res = ingestionService.sendDiscordAdminWebhook(
+                webhookUrl = state.adminLocalState.discordAdminWebhookUrl,
+                adminGate = state.appManifest.masterHubAdminGate,
+                healthStatus = state.healthStatus,
+            )
+            _uiState.update { it.copy(lastNotificationResults = listOf(res)) }
+            _messages.tryEmit("${res.channel}: ${res.detail}")
+        }
+    }
+
+    fun sendAdminEmailRelayOnly() {
+        val state = _uiState.value
+        if (!state.isCurrentUserAdmin) {
+            _messages.tryEmit("Admin Gate: Admin Email Relay requires a verified Master Hub Admin.")
+            return
+        }
+        viewModelScope.launch {
+            val res = ingestionService.sendAdminEmailRelay(
+                relayUrl = state.adminLocalState.emailRelayWebhookUrl,
+                adminEmails = state.appManifest.masterHubAdminGate.adminEmails,
+                healthStatus = state.healthStatus,
+            )
+            _uiState.update { it.copy(lastNotificationResults = listOf(res)) }
+            _messages.tryEmit("${res.channel}: ${res.detail}")
+        }
+    }
+
     fun buildMailtoEscalationUri(): Uri {
         val state = _uiState.value
         val diffText = state.stagedDiff?.let { d ->
@@ -394,6 +508,9 @@ class EngineSyncViewModel(
 
     fun buildDiagnosticReportJson(): String =
         ingestionService.serializeHealthStatusJson(_uiState.value.healthStatus)
+
+    fun buildAppManifestJson(): String =
+        repository.serializeAppManifestJson(_uiState.value.appManifest)
 
     fun buildHandshakeContractJson(): String =
         repository.serializeContractJson(_uiState.value.contract)
@@ -499,6 +616,7 @@ class EngineSyncViewModel(
                     return EngineSyncViewModel(
                         repository = container.engineSyncRepository,
                         ingestionService = container.engineSyncIngestionService,
+                        installedAppsBridge = container.installedAppsBridge,
                     ) as T
                 }
             }

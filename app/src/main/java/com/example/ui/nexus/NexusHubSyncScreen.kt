@@ -73,6 +73,9 @@ import com.example.domain.nexus.NexusRepoLinkManifest
 import com.example.ui.theme.StatusOfflineAmber
 import com.example.ui.theme.StatusConnected
 
+const val NEXUS_TAB_HUB_LINK = 0
+const val NEXUS_TAB_ENGINE_SYNC = 1
+
 private enum class NexusHubSection(val label: String) {
     SYNC_LINK("Hub Link"),
     ENGINE_SYNC("Engine Sync"),
@@ -87,12 +90,15 @@ fun NexusHubSyncScreen(
     engineSyncState: EngineSyncUiState,
     engineSyncViewModel: EngineSyncViewModel,
     autoTriggerSync: Boolean,
+    requestedTabIndex: Int? = null,
     activeMseCardName: String?,
     activeMseCardType: String?,
     activeMseCardRules: String?,
     activeFrameWidthPx: Int,
     activeFrameHeightPx: Int,
     onAutoSyncConsumed: () -> Unit,
+    onTabRequestConsumed: () -> Unit = {},
+    onLaunchNexusTcgApp: () -> Unit = {},
     onSaveManifest: (NexusRepoLinkManifest) -> Unit,
     onVerifyAndPullHub: () -> Unit,
     onApplyPendingDiff: () -> Unit,
@@ -113,11 +119,18 @@ fun NexusHubSyncScreen(
     val context = LocalContext.current
     var selectedSectionIndex by rememberSaveable { mutableIntStateOf(0) }
 
+    LaunchedEffect(requestedTabIndex) {
+        if (requestedTabIndex != null && requestedTabIndex in NexusHubSection.entries.indices) {
+            selectedSectionIndex = requestedTabIndex
+            onTabRequestConsumed()
+        }
+    }
+
     // Supports ?hubSync=1 deep-link / intent handshake trigger
     LaunchedEffect(autoTriggerSync) {
         if (autoTriggerSync) {
             onVerifyAndPullHub()
-            engineSyncViewModel.syncLiveGameEngine(uiState.fineGrainedPat.ifBlank { null })
+            engineSyncViewModel.syncLiveGameEngine(uiState.fineGrainedPat.ifBlank { null }, isManualRefresh = true)
             onAutoSyncConsumed()
         }
     }
@@ -223,7 +236,7 @@ fun NexusHubSyncScreen(
                     uiState = engineSyncState,
                     fineGrainedPat = uiState.fineGrainedPat,
                     onSyncLiveEngine = {
-                        engineSyncViewModel.syncLiveGameEngine(uiState.fineGrainedPat.ifBlank { null })
+                        engineSyncViewModel.syncLiveGameEngine(uiState.fineGrainedPat.ifBlank { null }, isManualRefresh = true)
                     },
                     onRecordCardMakerConsent = engineSyncViewModel::recordCardMakerConsent,
                     onFinalizeStagedUpdate = engineSyncViewModel::finalizeStagedEngineSnapshot,
@@ -241,6 +254,8 @@ fun NexusHubSyncScreen(
                         runCatching { context.startActivity(intent) }
                             .onFailure { onNotify("No email client found; use Save Health JSON or Copy.") }
                     },
+                    onLaunchNexusTcgApp = onLaunchNexusTcgApp,
+                    onRefreshCompanionApp = engineSyncViewModel::refreshCompanionAppStatus,
                 )
             }
 

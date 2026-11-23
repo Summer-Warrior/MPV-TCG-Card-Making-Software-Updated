@@ -10,17 +10,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.core.TcgStudioApplication
+import com.example.ui.HubDeepLinkRequest
 import com.example.ui.StudioViewModel
 import com.example.ui.TcgStudioApp
+import com.example.ui.nexus.EngineSyncViewModel
 import com.example.ui.nexus.NexusHubViewModel
 
 class MainActivity : ComponentActivity() {
-    private var pendingHubSyncHandshake by mutableStateOf(false)
+    private var pendingHubDeepLink by mutableStateOf<HubDeepLinkRequest?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        pendingHubSyncHandshake = isHubSyncIntent(intent)
+        pendingHubDeepLink = parseHubDeepLink(intent)
 
         val container = (application as TcgStudioApplication).container
         setContent {
@@ -30,15 +32,15 @@ class MainActivity : ComponentActivity() {
             val nexusHubViewModel: NexusHubViewModel = viewModel(
                 factory = NexusHubViewModel.factory(container),
             )
-            val engineSyncViewModel: com.example.ui.nexus.EngineSyncViewModel = viewModel(
-                factory = com.example.ui.nexus.EngineSyncViewModel.factory(container),
+            val engineSyncViewModel: EngineSyncViewModel = viewModel(
+                factory = EngineSyncViewModel.factory(container),
             )
             TcgStudioApp(
                 viewModel = studioViewModel,
                 nexusHubViewModel = nexusHubViewModel,
                 engineSyncViewModel = engineSyncViewModel,
-                pendingHubSyncHandshake = pendingHubSyncHandshake,
-                onHubSyncHandshakeConsumed = { pendingHubSyncHandshake = false },
+                pendingHubDeepLink = pendingHubDeepLink,
+                onHubDeepLinkConsumed = { pendingHubDeepLink = null },
             )
         }
     }
@@ -46,16 +48,38 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (isHubSyncIntent(intent)) {
-            pendingHubSyncHandshake = true
+        parseHubDeepLink(intent)?.let { req ->
+            pendingHubDeepLink = req
         }
     }
 
-    private fun isHubSyncIntent(intent: Intent?): Boolean {
-        if (intent == null) return false
-        val uriParam = intent.data?.getQueryParameter("hubSync")
-        return uriParam == "1" ||
-            uriParam.equals("true", ignoreCase = true) ||
+    private fun parseHubDeepLink(intent: Intent?): HubDeepLinkRequest? {
+        if (intent == null) return null
+        val uri = intent.data
+        val isSchemeMatch = uri != null &&
+            uri.scheme.equals("tcgstudio", ignoreCase = true) &&
+            uri.host.equals("nexus-hub", ignoreCase = true)
+
+        val hubSyncParam = uri?.getQueryParameter("hubSync")
+        val hubSync = hubSyncParam == "1" ||
+            hubSyncParam.equals("true", ignoreCase = true) ||
             intent.getBooleanExtra("hubSync", false)
+
+        val exportParam = uri?.getQueryParameter("exportClientInfo")
+        val exportClientInfo = exportParam == "1" ||
+            exportParam.equals("true", ignoreCase = true) ||
+            intent.getBooleanExtra("exportClientInfo", false)
+
+        val fromApp = uri?.getQueryParameter("from")?.trim()?.ifBlank { null }
+            ?: intent.getStringExtra("from")?.trim()?.ifBlank { null }
+
+        if (!isSchemeMatch && !hubSync && !exportClientInfo && fromApp == null) {
+            return null
+        }
+        return HubDeepLinkRequest(
+            hubSync = hubSync || fromApp.equals("nexustcg", ignoreCase = true),
+            exportClientInfo = exportClientInfo,
+            fromApp = fromApp,
+        )
     }
 }

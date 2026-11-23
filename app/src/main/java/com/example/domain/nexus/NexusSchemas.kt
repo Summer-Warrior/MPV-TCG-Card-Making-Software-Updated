@@ -42,7 +42,7 @@ enum class ClientCategory(val wireValue: String, val displayLabel: String) {
 data class NexusRepoLinkManifest(
     @Json(name = "thisRepo") val thisRepo: String = "Summer-Warrior/MPV-TCG-Card-Making-Software-Updated",
     @Json(name = "thisBranch") val thisBranch: String = "main",
-    @Json(name = "linkedHubRepo") val linkedHubRepo: String = "Summer-Warrior/Nexus-Master-Hub",
+    @Json(name = "linkedHubRepo") val linkedHubRepo: String = "Summer-Warrior/Project-MPV-RP-Master-Hub",
     @Json(name = "linkedHubBranch") val linkedHubBranch: String = "main",
     @Json(name = "linkedGameEngineRepo") val linkedGameEngineRepo: String = "Summer-Warrior/Tcg-game-engine-test",
     @Json(name = "linkedGameEngineBranch") val linkedGameEngineBranch: String = "main",
@@ -107,7 +107,7 @@ data class NexusClientCodestringIndex(
     @Json(name = "schemaVersion") val schemaVersion: String = "1.0.0",
     @Json(name = "indexRevision") val indexRevision: String = "local-seed-1",
     @Json(name = "updatedAt") val updatedAt: String = "2026-11-22T00:00:00Z",
-    @Json(name = "hubRepo") val hubRepo: String = "Summer-Warrior/Nexus-Master-Hub",
+    @Json(name = "hubRepo") val hubRepo: String = "Summer-Warrior/Project-MPV-RP-Master-Hub",
     @Json(name = "colorPieGrammarVersion") val colorPieGrammarVersion: String = "20-color-canonical-v1",
     @Json(name = "clients") val clients: List<NexusClientDefinition> = emptyList(),
     @Json(name = "notebookFormats") val notebookFormats: List<NotebookFormatEntry> = emptyList(),
@@ -199,24 +199,24 @@ object TwentyColorPieCatalog {
 
     val baseTwentyColors: List<ColorPiePipSpec> = listOf(
         ColorPiePipSpec("{W}", "White", 1),
-        ColorPiePipSpec("{U}", "Blue", 1),
-        ColorPiePipSpec("{B}", "Black", 1),
-        ColorPiePipSpec("{R}", "Red", 1),
-        ColorPiePipSpec("{G}", "Green", 1),
-        ColorPiePipSpec("{P}", "Purple", 1),
-        ColorPiePipSpec("{Y}", "Yellow", 1),
-        ColorPiePipSpec("{O}", "Orange", 1),
+        ColorPiePipSpec("{Iv}", "Ivory", 1),
         ColorPiePipSpec("{Cy}", "Cyan", 1),
-        ColorPiePipSpec("{Pk}", "Pink", 1),
-        ColorPiePipSpec("{Br}", "Brown", 1),
-        ColorPiePipSpec("{Te}", "Teal", 1),
+        ColorPiePipSpec("{Az}", "Azure", 1),
+        ColorPiePipSpec("{U}", "Blue", 1),
         ColorPiePipSpec("{In}", "Indigo", 1),
-        ColorPiePipSpec("{Mg}", "Magenta", 1),
-        ColorPiePipSpec("{Li}", "Lime", 1),
-        ColorPiePipSpec("{Sl}", "Silver", 1),
-        ColorPiePipSpec("{Gd}", "Gold", 1),
-        ColorPiePipSpec("{Cr}", "Crimson", 1),
+        ColorPiePipSpec("{Vi}", "Violet", 1),
         ColorPiePipSpec("{Ob}", "Obsidian", 1),
+        ColorPiePipSpec("{B}", "Black", 1),
+        ColorPiePipSpec("{Cr}", "Crimson", 1),
+        ColorPiePipSpec("{Mg}", "Magenta", 1),
+        ColorPiePipSpec("{Sc}", "Scarlet", 1),
+        ColorPiePipSpec("{R}", "Red", 1),
+        ColorPiePipSpec("{Or}", "Orange", 1),
+        ColorPiePipSpec("{Am}", "Amber", 1),
+        ColorPiePipSpec("{Ch}", "Chartreuse", 1),
+        ColorPiePipSpec("{G}", "Green", 1),
+        ColorPiePipSpec("{Ja}", "Jade", 1),
+        ColorPiePipSpec("{Te}", "Teal", 1),
         ColorPiePipSpec("{Aq}", "Aqua", 1),
     )
 
@@ -227,15 +227,16 @@ object TwentyColorPieCatalog {
     )
 
     val layer20OmegaPips: List<ColorPiePipSpec> = listOf(
-        ColorPiePipSpec("{Ω·M}", "Omega M", 20),
-        ColorPiePipSpec("{Ω·C}", "Omega C", 20),
-        ColorPiePipSpec("{Ω·S}", "Omega S", 20),
-        ColorPiePipSpec("{Ω·V}", "Omega V", 20),
-        ColorPiePipSpec("{Ω·E}", "Omega E", 20),
+        ColorPiePipSpec("{Ω·M}", "Hexagram Star", 20),
+        ColorPiePipSpec("{Ω·C}", "Celestial Octagram", 20),
+        ColorPiePipSpec("{Ω·S}", "Sacred Halo Ring", 20),
+        ColorPiePipSpec("{Ω·V}", "Astral Merkaba", 20),
+        ColorPiePipSpec("{Ω·E}", "Primordial Sunburst", 20),
+        ColorPiePipSpec("{Ω·A}", "Solar Astrolabe", 20),
     )
 
     val baseSymbols: Set<String> = baseTwentyColors.map { it.code.removeSurrounding("{", "}") }.toSet()
-    val omegaCodes: Set<String> = layer20OmegaPips.map { it.code }.toSet()
+    val omegaCodes: Set<String> = (layer20OmegaPips.map { it.code } + "{Ω}").toSet()
 
     fun buildFusedPair(firstCode: String, secondCode: String): String {
         val a = firstCode.removeSurrounding("{", "}")
@@ -246,7 +247,7 @@ object TwentyColorPieCatalog {
     fun buildChoiceSplit(firstCode: String, secondCode: String): String {
         val a = firstCode.removeSurrounding("{", "}")
         val b = secondCode.removeSurrounding("{", "}")
-        return "{$a/$b}"
+        return "{$a|$b}"
     }
 
     fun buildWeightedLead(leadCode: String, leadWeight: Int, secondaryCode: String): String {

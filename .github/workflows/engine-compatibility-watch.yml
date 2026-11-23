@@ -1,5 +1,8 @@
 name: Engine Compatibility Watchdog & Master Hub Notification Handshake
 
+# Automated scheduled/push checks are paused during pre-release personal installs.
+# Cross-repo alignment checks run automatically when opening the installed Android app
+# (re-enable schedule/push triggers here once official public releases begin).
 on:
   workflow_dispatch:
     inputs:
@@ -7,15 +10,6 @@ on:
         description: "Force notification even if commit SHA was already alerted"
         required: false
         default: "false"
-  schedule:
-    - cron: "0 */6 * * *"
-  push:
-    branches:
-      - main
-    paths:
-      - "handshake-contract.json"
-      - "nexus-repo-link.json"
-      - "nexus-app.json"
 
 permissions:
   contents: write
@@ -192,7 +186,7 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             -H "Authorization: Bearer ${MASTER_HUB_DISPATCH_TOKEN}" \
-            "https://api.github.com/repos/Summer-Warrior/Nexus-Master-Hub/dispatches" \
+            "https://api.github.com/repos/Summer-Warrior/Project-MPV-RP-Master-Hub/dispatches" \
             -d "{\"event_type\":\"nexus_engine_breaking_alert\",\"client_payload\":${PAYLOAD}}"
 
       - name: Channel 3 — Discord Admin Role Webhook Alert

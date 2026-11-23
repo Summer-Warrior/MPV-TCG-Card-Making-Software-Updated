@@ -1,5 +1,8 @@
 name: MPV <-> Nexus Master Hub Bidirectional Sync
 
+# Automated scheduled/push checks are paused during pre-release personal installs.
+# Hub sync checks run automatically when opening the installed Android app
+# (re-enable schedule/push triggers here once official public releases begin).
 on:
   workflow_dispatch:
     inputs:
@@ -7,14 +10,6 @@ on:
         description: "Sync direction (pull_from_hub | verify_only)"
         required: false
         default: "pull_from_hub"
-  schedule:
-    - cron: "0 */12 * * *"
-  push:
-    branches:
-      - main
-    paths:
-      - "nexus-repo-link.json"
-      - "nexus-bridge/card-packs/**"
 
 permissions:
   contents: write
@@ -47,7 +42,7 @@ jobs:
 
           manifest = json.loads(link_path.read_text(encoding="utf-8"))
           this_repo = manifest["thisRepo"]
-          hub_repo = manifest["linkedHubRepo"]
+          hub_repo = manifest.get("linkedHubRepo", "Summer-Warrior/Project-MPV-RP-Master-Hub")
           hub_branch = manifest.get("linkedHubBranch", "main")
           index_path = manifest["hubIndexPath"]
           packs_dir = Path(manifest.get("exportedPacksDir", "nexus-bridge/card-packs/"))
@@ -128,3 +123,16 @@ jobs:
           else
             echo "No Hub index changes to commit."
           fi
+
+      - name: Notify Project-MPV-RP-Master-Hub (Optional Dispatch)
+        if: env.MASTER_HUB_DISPATCH_TOKEN != ''
+        env:
+          MASTER_HUB_DISPATCH_TOKEN: ${{ secrets.MASTER_HUB_DISPATCH_TOKEN }}
+        run: |
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            -H "Authorization: Bearer ${MASTER_HUB_DISPATCH_TOKEN}" \
+            "https://api.github.com/repos/Summer-Warrior/Project-MPV-RP-Master-Hub/dispatches" \
+            -d '{"event_type":"mpv_card_maker_synced","client_payload":{"repo":"Summer-Warrior/MPV-TCG-Card-Making-Software-Updated","branch":"main"}}'
+

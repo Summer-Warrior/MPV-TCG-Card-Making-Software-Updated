@@ -91,4 +91,8 @@ class AppContainer(context: Context) {
         context = appContext,
         moshi = moshi,
     )
+
+    val installedAppsBridge = com.example.data.nexus.InstalledAppsBridge(
+        context = appContext,
+    )
 }

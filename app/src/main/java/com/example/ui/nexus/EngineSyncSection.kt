@@ -1,6 +1,5 @@
 package com.example.ui.nexus
 
-import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,13 +14,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PauseCircle
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
@@ -29,6 +33,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -43,20 +48,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.example.domain.nexus.AlignmentWarningEvaluation
 import com.example.domain.nexus.ConsentStatus
+import com.example.domain.nexus.EngineCommitDiff
 import com.example.domain.nexus.EngineHealthSeverity
 import com.example.domain.nexus.EngineHealthStatusPayload
+import com.example.domain.nexus.HandshakeContract
+import com.example.domain.nexus.InstalledCompanionAppInfo
 import com.example.ui.theme.StatusConnected
 import com.example.ui.theme.StatusOfflineAmber
 
 /**
  * Live Engine Data Reader (`Summer-Warrior/Tcg-game-engine-test`), Two-Way Handshake
- * Dual-Engine Update Consent UI, and Master Hub Admin Gate / Tri-Channel Notification Controls.
+ * Dual-Engine Update Consent UI, Private Play Store Companion App Bridge,
+ * and Master Hub Admin Gate / Tri-Channel Notification Controls.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -81,6 +90,8 @@ fun EngineSyncSection(
     onExportHealthJson: () -> Unit,
     onCopyContractJson: () -> Unit,
     onLaunchMailto: () -> Unit,
+    onLaunchNexusTcgApp: () -> Unit,
+    onRefreshCompanionApp: () -> Unit,
 ) {
     val gate = uiState.appManifest.masterHubAdminGate
     val local = uiState.adminLocalState
@@ -203,6 +214,80 @@ fun EngineSyncSection(
             }
         }
 
+        // ---- Private Play Store Companion App Detection & Deep-Link Handshake ----
+        item {
+            val companion = uiState.companionEngineApp
+            val companionTint = if (companion.isInstalled) StatusConnected else StatusOfflineAmber
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, companionTint.copy(alpha = 0.65f)),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PhoneAndroid,
+                            contentDescription = "Companion Android App",
+                            tint = companionTint,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Companion App: NexusTCG (${companion.packageName})",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(
+                                text = companion.summaryLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = companionTint,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Distribution Policy: ${uiState.appManifest.distributionPolicy} • Deep Link: ${uiState.appManifest.gameEngineDeepLinkScheme}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = onLaunchNexusTcgApp,
+                            enabled = companion.isInstalled || companion.canHandleDeepLink,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("engine_open_companion_app_button"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("Open NexusTCG App (Handshake)")
+                        }
+                        OutlinedButton(
+                            onClick = onRefreshCompanionApp,
+                            modifier = Modifier.testTag("engine_refresh_companion_button"),
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Check")
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- Dual-Engine Update Consent Contract Card ----
         item {
             val c = uiState.contract
@@ -219,6 +304,11 @@ fun EngineSyncSection(
                     Text(
                         text = "Dual-Engine Update Consent (handshake-contract.json v${c.contractVersion})",
                         style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        text = "Master Hub: ${c.masterHubRepo}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
                         text = "Card Maker Consent: ${c.cardMakerConsent.status} (${c.cardMakerConsent.commitSha.take(10).ifBlank { "none" }})",
@@ -359,7 +449,7 @@ fun EngineSyncSection(
                         )
                     }
                     Text(
-                        text = "Blocking alert modals appear strictly for authenticated Master Hub Admins. Discord Webhook & Email Relay are configurable and never store Discord Bot Tokens.",
+                        text = "Alignment & Update Warning pop-ups always appear on open when misalignment is detected so you can inspect diffs or open NexusTCG. Destructive Pause Sync, Discord Admin Webhook, and Email Relay actions remain strictly gated to verified Master Hub Admins.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -445,15 +535,17 @@ fun EngineSyncSection(
                         ) {
                             Text("Save Admin Gate")
                         }
-                        OutlinedButton(onClick = onDispatchAdminNotifications) {
-                            Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text(if (fineGrainedPat.isNotBlank()) "Send Hub+Discord+Email" else "Send Webhook Alerts")
-                        }
-                        OutlinedButton(onClick = onLaunchMailto) {
-                            Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Mailto Escalation")
+                        if (uiState.isCurrentUserAdmin) {
+                            OutlinedButton(onClick = onDispatchAdminNotifications) {
+                                Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(if (fineGrainedPat.isNotBlank()) "Send Hub+Discord+Email" else "Send Webhook Alerts")
+                            }
+                            OutlinedButton(onClick = onLaunchMailto) {
+                                Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Mailto Escalation")
+                            }
                         }
                         TextButton(onClick = onExportHealthJson) {
                             Text("Save Health JSON")
@@ -474,48 +566,105 @@ fun EngineSyncSection(
 }
 
 /**
- * High-priority blocking alert modal shown EXCLUSIVELY to authenticated Master Hub Admins
- * when `Tcg-game-engine-test` evaluates to DEGRADED or BREAKING_INCOMPATIBLE.
+ * Automatic On-Open Alignment & Update Warning Pop-Up (Private Play Store & Live Sync).
+ *
+ * Visibility is NEVER hidden behind empty admin gate lists so the user is always warned
+ * on open when `Tcg-game-engine-test`, `Project-MPV-RP-Master-Hub`, or Dual-Engine Consent
+ * is misaligned. Destructive / external escalation actions remain strictly gated to verified
+ * Master Hub Admins (`isCurrentUserAdmin == true`).
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun AdminBreakingChangeAlertModal(
+fun AlignmentWarningDialog(
+    evaluation: AlignmentWarningEvaluation,
     healthStatus: EngineHealthStatusPayload,
-    onPauseSync: () -> Unit,
-    onInspectDiff: () -> Unit,
+    contract: HandshakeContract,
+    missingEngineFiles: List<String>,
+    stagedDiff: EngineCommitDiff?,
+    companionEngineApp: InstalledCompanionAppInfo,
+    isCurrentUserAdmin: Boolean,
+    onOpenHandshakeArea: () -> Unit,
+    onLaunchNexusTcgApp: () -> Unit,
     onExportDiagnosticReport: () -> Unit,
-    onLaunchMailto: () -> Unit,
-    onDismiss: () -> Unit,
+    onDismissForSha: () -> Unit,
+    onHideTemporarily: () -> Unit,
+    onAdminPauseSync: () -> Unit,
+    onAdminSendDiscordWebhook: () -> Unit,
+    onAdminSendEmailRelay: () -> Unit,
+    onAdminLaunchMailto: () -> Unit,
 ) {
+    val isBreaking = evaluation.engineHealthSeverity == EngineHealthSeverity.BREAKING_INCOMPATIBLE.wireValue
+    val accentColor = if (isBreaking) MaterialTheme.colorScheme.error else StatusOfflineAmber
+
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = onHideTemporarily,
         icon = {
             Icon(
-                imageVector = Icons.Default.Error,
-                contentDescription = "Breaking Change Alert",
-                tint = MaterialTheme.colorScheme.error,
+                imageVector = if (isBreaking) Icons.Default.Error else Icons.Default.Warning,
+                contentDescription = "Cross-Repo Alignment Warning",
+                tint = accentColor,
             )
         },
         title = {
             Text(
-                text = "Admin Alert: ${healthStatus.severity}",
-                color = MaterialTheme.colorScheme.error,
+                text = if (isBreaking) {
+                    "Alignment Alert: BREAKING"
+                } else {
+                    "Cross-Repo Alignment Check"
+                },
+                color = accentColor,
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Text(
-                    text = "Engine Repo: ${healthStatus.targetEngineRepo}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    text = "Failing Commit: ${healthStatus.failingCommitSha.ifBlank { "unknown" }}",
+                    text = "Engine Health: ${evaluation.engineHealthSeverity} (${healthStatus.targetEngineRepo})",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "Master Hub Ack Status: ${healthStatus.masterHubAckStatus}",
+                    text = "Master Hub Link (${contract.masterHubRepo}): ${evaluation.mutualLinkStatus.wireValue}",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Text(
+                    text = "Commit SHA: ${evaluation.failingCommitSha.take(12).ifBlank { "unknown" }}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    text = "Dual-Engine Consent: Card Maker=${contract.cardMakerConsent.status} • Game Engine=${contract.gameEngineConsent.status}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    text = "NexusTCG Android App (${companionEngineApp.packageName}): ${companionEngineApp.summaryLabel}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+
+                if (evaluation.reasons.isNotEmpty()) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+                    Text(
+                        text = "Detected Misalignment:",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = accentColor,
+                    )
+                    evaluation.reasons.forEach { reason ->
+                        Text(
+                            text = "• $reason",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+
+                if (missingEngineFiles.isNotEmpty()) {
+                    Text(
+                        text = "Missing Engine Files: ${missingEngineFiles.joinToString(", ")}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+
                 if (healthStatus.brokenCapabilities.isNotEmpty()) {
                     Text(
                         text = "Broken Capabilities: ${healthStatus.brokenCapabilities.joinToString(", ")}",
@@ -523,29 +672,105 @@ fun AdminBreakingChangeAlertModal(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                if (healthStatus.affectedCardFrames.isNotEmpty()) {
+
+                stagedDiff?.takeIf { it.hasDiff }?.let { diff ->
                     Text(
-                        text = "Affected Card Frames: ${healthStatus.affectedCardFrames.joinToString(", ")}",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "Staged Schema Diff (${diff.fromCommitSha.take(8)} → ${diff.toCommitSha.take(8)}): Variants +${diff.addedVariantIds.size}/-${diff.removedVariantIds.size}, Phases +${diff.addedTurnPhases.size}/-${diff.removedTurnPhases.size}, Effects +${diff.addedEffectTypes.size}/-${diff.removedEffectTypes.size}, BoundsChanged=${diff.boundsChanged}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                // Inspection & Cross-App Actions (Available to ALL users)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Button(
+                        onClick = onOpenHandshakeArea,
+                        modifier = Modifier.testTag("alignment_modal_open_handshake"),
+                    ) {
+                        Text("Open Handshake Area")
+                    }
+                    if (companionEngineApp.isInstalled || companionEngineApp.canHandleDeepLink) {
+                        OutlinedButton(
+                            onClick = onLaunchNexusTcgApp,
+                            modifier = Modifier.testTag("alignment_modal_open_nexustcg"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text("Open NexusTCG App")
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onExportDiagnosticReport,
+                        modifier = Modifier.testTag("alignment_modal_export_json"),
+                    ) {
+                        Text("Export Diagnostic JSON")
+                    }
+                }
+
+                // Destructive & External Escalation Actions (Strictly Gated to Master Hub Admins)
+                if (isCurrentUserAdmin) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    Text(
+                        text = "Admin-Only Actions (Master Hub Verified):",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Button(
+                            onClick = onAdminPauseSync,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier.testTag("alignment_modal_admin_pause_sync"),
+                        ) {
+                            Text("Pause Sync")
+                        }
+                        OutlinedButton(
+                            onClick = onAdminSendDiscordWebhook,
+                            modifier = Modifier.testTag("alignment_modal_admin_discord"),
+                        ) {
+                            Text("Discord Webhook")
+                        }
+                        OutlinedButton(
+                            onClick = onAdminSendEmailRelay,
+                            modifier = Modifier.testTag("alignment_modal_admin_email"),
+                        ) {
+                            Text("Email Relay")
+                        }
+                        TextButton(
+                            onClick = onAdminLaunchMailto,
+                            modifier = Modifier.testTag("alignment_modal_admin_mailto"),
+                        ) {
+                            Text("Mailto")
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
             Button(
-                onClick = onPauseSync,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                modifier = Modifier.testTag("admin_modal_pause_sync"),
+                onClick = onDismissForSha,
+                modifier = Modifier.testTag("alignment_modal_dismiss_sha"),
             ) {
-                Text("Pause Sync")
+                Text("Dismiss for This SHA")
             }
         },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onInspectDiff) { Text("Inspect Diff") }
-                TextButton(onClick = onExportDiagnosticReport) { Text("Export Report") }
-                TextButton(onClick = onLaunchMailto) { Text("Email") }
-                TextButton(onClick = onDismiss) { Text("Close") }
+            TextButton(
+                onClick = onHideTemporarily,
+                modifier = Modifier.testTag("alignment_modal_hide_later"),
+            ) {
+                Text("Close")
             }
         },
     )

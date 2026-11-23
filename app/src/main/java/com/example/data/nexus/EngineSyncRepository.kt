@@ -8,6 +8,7 @@ import com.example.domain.nexus.NexusAppManifest
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -15,6 +16,7 @@ import java.io.File
 @JsonClass(generateAdapter = true)
 data class AdminAlertLocalState(
     @Json(name = "alertedCommitShas") val alertedCommitShas: List<String> = emptyList(),
+    @Json(name = "dismissedAlignmentKeys") val dismissedAlignmentKeys: List<String> = emptyList(),
     @Json(name = "etags") val etags: Map<String, String> = emptyMap(),
     @Json(name = "syncPaused") val syncPaused: Boolean = false,
     @Json(name = "currentUserRoleIds") val currentUserRoleIds: List<String> = emptyList(),
@@ -26,7 +28,11 @@ data class AdminAlertLocalState(
 
 /**
  * Persists `nexus-app.json`, `handshake-contract.json`, verified baseline `engine-sync-snapshot.json`,
- * signed `engine-health-status.json`, ETag cache, and deduplicated commit-SHA alert history.
+ * signed `engine-health-status.json`, ETag cache, verified cached engine file contents (for HTTP 304),
+ * and deduplicated commit-SHA alert/dismissal history.
+ *
+ * Automatically migrates legacy `Summer-Warrior/Nexus-Master-Hub` references on upgrade to
+ * `Summer-Warrior/Project-MPV-RP-Master-Hub`.
  */
 class EngineSyncRepository(
     context: Context,
@@ -38,12 +44,16 @@ class EngineSyncRepository(
     private val snapshotFile = File(dir, "engine-sync-snapshot.json")
     private val healthFile = File(dir, "engine-health-status.json")
     private val localStateFile = File(dir, "admin_alert_state.json")
+    private val cachedFilesFile = File(dir, "cached_engine_files.json")
 
     private val appManifestAdapter = moshi.adapter(NexusAppManifest::class.java).indent("  ")
     private val contractAdapter = moshi.adapter(HandshakeContract::class.java).indent("  ")
     private val snapshotAdapter = moshi.adapter(EngineSyncSnapshot::class.java).indent("  ")
     private val healthAdapter = moshi.adapter(EngineHealthStatusPayload::class.java).indent("  ")
     private val localStateAdapter = moshi.adapter(AdminAlertLocalState::class.java).indent("  ")
+    private val stringMapAdapter = moshi.adapter<Map<String, String>>(
+        Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
+    )
 
     suspend fun loadAppManifest(): NexusAppManifest = withContext(Dispatchers.IO) {
         if (!appManifestFile.exists()) {
@@ -51,8 +61,14 @@ class EngineSyncRepository(
             saveAppManifest(seed)
             return@withContext seed
         }
-        runCatching { appManifestAdapter.fromJson(appManifestFile.readText(Charsets.UTF_8)) }
+        val loaded = runCatching { appManifestAdapter.fromJson(appManifestFile.readText(Charsets.UTF_8)) }
             .getOrNull() ?: NexusAppManifest()
+        if (loaded.linkedMasterHub.equals(LEGACY_HUB_SLUG, ignoreCase = true)) {
+            val migrated = loaded.copy(linkedMasterHub = LIVE_HUB_SLUG)
+            saveAppManifest(migrated)
+            return@withContext migrated
+        }
+        loaded
     }
 
     suspend fun saveAppManifest(manifest: NexusAppManifest) = withContext(Dispatchers.IO) {
@@ -65,8 +81,17 @@ class EngineSyncRepository(
             saveContract(seed)
             return@withContext seed
         }
-        runCatching { contractAdapter.fromJson(contractFile.readText(Charsets.UTF_8)) }
+        val loaded = runCatching { contractAdapter.fromJson(contractFile.readText(Charsets.UTF_8)) }
             .getOrNull() ?: HandshakeContract()
+        if (loaded.masterHubRepo.equals(LEGACY_HUB_SLUG, ignoreCase = true) || loaded.contractVersion == "1.0.0") {
+            val migrated = loaded.copy(
+                contractVersion = "1.1.0",
+                masterHubRepo = LIVE_HUB_SLUG,
+            )
+            saveContract(migrated)
+            return@withContext migrated
+        }
+        loaded
     }
 
     suspend fun saveContract(contract: HandshakeContract) = withContext(Dispatchers.IO) {
@@ -106,6 +131,16 @@ class EngineSyncRepository(
         writeAtomic(localStateFile, localStateAdapter.toJson(state) + "\n")
     }
 
+    suspend fun loadCachedEngineFiles(): Map<String, String> = withContext(Dispatchers.IO) {
+        if (!cachedFilesFile.exists()) return@withContext emptyMap()
+        runCatching { stringMapAdapter.fromJson(cachedFilesFile.readText(Charsets.UTF_8)) }
+            .getOrNull().orEmpty()
+    }
+
+    suspend fun saveCachedEngineFiles(files: Map<String, String>) = withContext(Dispatchers.IO) {
+        writeAtomic(cachedFilesFile, stringMapAdapter.toJson(files))
+    }
+
     fun serializeContractJson(contract: HandshakeContract): String =
         contractAdapter.toJson(contract) + "\n"
 
@@ -120,5 +155,10 @@ class EngineSyncRepository(
         val tmp = File(dir, "${target.name}.tmp")
         tmp.writeText(content, Charsets.UTF_8)
         tmp.renameTo(target)
+    }
+
+    companion object {
+        private const val LEGACY_HUB_SLUG = "Summer-Warrior/Nexus-Master-Hub"
+        private const val LIVE_HUB_SLUG = "Summer-Warrior/Project-MPV-RP-Master-Hub"
     }
 }
