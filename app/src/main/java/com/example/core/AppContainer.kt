@@ -39,7 +39,10 @@ class AppContainer(context: Context) {
         settingsRepository = settingsRepository,
     )
 
-    val mseWorkspaceRepository = MseWorkspaceRepository(appContext)
+    val mseWorkspaceRepository = MseWorkspaceRepository(
+        context = appContext,
+        moshi = moshi,
+    )
 
     val fontCatalogRepository = FontCatalogRepository(
         context = appContext,

@@ -23,6 +23,26 @@ sealed class MseLineNode {
     }
 }
 
+data class MseSetInfo(
+    val title: String = "",
+    val description: String = "",
+    val artist: String = "",
+    val copyright: String = "",
+    val setCode: String = "",
+    val language: String = "EN",
+    val borderColor: String = "rgb(0,0,0)",
+)
+
+data class MseKeywordView(
+    val index: Int,
+    val documentNodeIndex: Int,
+    val keyword: String,
+    val match: String,
+    val reminder: String,
+    val rules: String = "",
+    val mode: String = "custom",
+)
+
 /**
  * Lossless representation of an entire `.mse-set`'s `set` file.
  */
@@ -40,17 +60,28 @@ data class MseSetDocument(
     val stylesheet: String
         get() = findTopLevelScalar("stylesheet") ?: "m15-altered"
 
-    val setTitle: String
+    val setInfo: MseSetInfo
         get() {
-            val setInfo = nodes.filterIsInstance<MseLineNode.Entry>()
+            val block = nodes.filterIsInstance<MseLineNode.Entry>()
                 .firstOrNull { it.key == "set info" && it.isBlock }
-            return setInfo?.children
+            fun prop(key: String): String = block?.children
                 ?.filterIsInstance<MseLineNode.Entry>()
-                ?.firstOrNull { it.key == "title" }
+                ?.firstOrNull { it.key == key }
                 ?.textValue
-                ?.takeIf { it.isNotBlank() }
-                ?: "Untitled Set"
+                ?: ""
+            return MseSetInfo(
+                title = prop("title"),
+                description = prop("description"),
+                artist = prop("artist"),
+                copyright = prop("copyright"),
+                setCode = prop("set code"),
+                language = prop("set language").ifBlank { "EN" },
+                borderColor = prop("border color").ifBlank { "rgb(0,0,0)" },
+            )
         }
+
+    val setTitle: String
+        get() = setInfo.title.takeIf { it.isNotBlank() } ?: "Untitled Set"
 
     val cards: List<MseCardView>
         get() {
@@ -62,6 +93,31 @@ data class MseSetDocument(
                         index = cardIndex++,
                         documentNodeIndex = nodeIndex,
                         entry = node,
+                    )
+                }
+            }
+            return result
+        }
+
+    val keywords: List<MseKeywordView>
+        get() {
+            val result = mutableListOf<MseKeywordView>()
+            var kwIndex = 0
+            nodes.forEachIndexed { nodeIndex, node ->
+                if (node is MseLineNode.Entry && node.key == "keyword" && node.isBlock) {
+                    fun prop(key: String): String = node.children
+                        .filterIsInstance<MseLineNode.Entry>()
+                        .firstOrNull { it.key == key }
+                        ?.textValue
+                        ?: ""
+                    result += MseKeywordView(
+                        index = kwIndex++,
+                        documentNodeIndex = nodeIndex,
+                        keyword = prop("keyword"),
+                        match = prop("match"),
+                        reminder = prop("reminder"),
+                        rules = prop("rules"),
+                        mode = prop("mode").ifBlank { "custom" },
                     )
                 }
             }
@@ -83,6 +139,52 @@ data class MseSetDocument(
             updated.add(0, newEntry)
         }
         return copy(nodes = updated)
+    }
+
+    fun withSetInfoUpdated(updatedInfo: MseSetInfo): MseSetDocument {
+        val updatedNodes = nodes.toMutableList()
+        val idx = updatedNodes.indexOfFirst {
+            it is MseLineNode.Entry && it.key == "set info" && it.isBlock
+        }
+        val existingBlock = if (idx >= 0) {
+            updatedNodes[idx] as MseLineNode.Entry
+        } else {
+            MseLineNode.Entry(key = "set info", isBlock = true)
+        }
+
+        val children = existingBlock.children.toMutableList()
+        fun upsert(key: String, value: String, allowMultiline: Boolean = false) {
+            val childIdx = children.indexOfFirst { it is MseLineNode.Entry && it.key == key }
+            val newEntry = if (allowMultiline && value.contains('\n')) {
+                MseLineNode.Entry(key = key, multilineValue = value.split("\n"))
+            } else {
+                MseLineNode.Entry(key = key, inlineValue = value)
+            }
+            if (childIdx >= 0) {
+                children[childIdx] = newEntry
+            } else if (value.isNotEmpty() || key == "title" || key == "set code") {
+                children.add(newEntry)
+            }
+        }
+
+        upsert("title", updatedInfo.title)
+        upsert("description", updatedInfo.description, allowMultiline = true)
+        upsert("artist", updatedInfo.artist)
+        upsert("copyright", updatedInfo.copyright)
+        upsert("set code", updatedInfo.setCode)
+        upsert("set language", updatedInfo.language)
+        upsert("border color", updatedInfo.borderColor)
+
+        val newBlock = existingBlock.copy(children = children)
+        if (idx >= 0) {
+            updatedNodes[idx] = newBlock
+        } else {
+            val insertAt = updatedNodes.indexOfFirst {
+                it is MseLineNode.Entry && it.key == "stylesheet"
+            }.let { if (it >= 0) it + 1 else updatedNodes.size }
+            updatedNodes.add(insertAt, newBlock)
+        }
+        return copy(nodes = updatedNodes)
     }
 
     fun withCardFieldUpdated(cardIndex: Int, fieldKey: String, newValue: String?): MseSetDocument {
@@ -151,6 +253,83 @@ data class MseSetDocument(
             ),
         )
         return copy(nodes = nodes + blankCard)
+    }
+
+    fun withDuplicatedCard(cardIndex: Int, timestampIso: String): MseSetDocument {
+        val source = cards.getOrNull(cardIndex) ?: return this
+        val clonedChildren = source.entry.children.map { node ->
+            if (node is MseLineNode.Entry && (node.key == "time created" || node.key == "time modified")) {
+                node.copy(inlineValue = timestampIso, multilineValue = emptyList())
+            } else {
+                node
+            }
+        }
+        val clonedEntry = source.entry.copy(children = clonedChildren)
+        val updated = nodes.toMutableList()
+        updated.add(source.documentNodeIndex + 1, clonedEntry)
+        return copy(nodes = updated)
+    }
+
+    fun withDeletedCard(cardIndex: Int): MseSetDocument {
+        val target = cards.getOrNull(cardIndex) ?: return this
+        val updated = nodes.toMutableList()
+        updated.removeAt(target.documentNodeIndex)
+        return copy(nodes = updated)
+    }
+
+    fun withAddedKeyword(
+        keyword: String,
+        match: String,
+        reminder: String,
+        rules: String = "",
+        mode: String = "custom",
+    ): MseSetDocument {
+        val kwBlock = buildKeywordEntry(keyword, match, reminder, rules, mode)
+        return copy(nodes = nodes + kwBlock)
+    }
+
+    fun withUpdatedKeyword(
+        keywordIndex: Int,
+        keyword: String,
+        match: String,
+        reminder: String,
+        rules: String = "",
+        mode: String = "custom",
+    ): MseSetDocument {
+        val target = keywords.getOrNull(keywordIndex) ?: return this
+        val updated = nodes.toMutableList()
+        updated[target.documentNodeIndex] = buildKeywordEntry(keyword, match, reminder, rules, mode)
+        return copy(nodes = updated)
+    }
+
+    fun withDeletedKeyword(keywordIndex: Int): MseSetDocument {
+        val target = keywords.getOrNull(keywordIndex) ?: return this
+        val updated = nodes.toMutableList()
+        updated.removeAt(target.documentNodeIndex)
+        return copy(nodes = updated)
+    }
+
+    private fun buildKeywordEntry(
+        keyword: String,
+        match: String,
+        reminder: String,
+        rules: String,
+        mode: String,
+    ): MseLineNode.Entry {
+        val children = mutableListOf(
+            MseLineNode.Entry(key = "keyword", inlineValue = keyword.trim()),
+            MseLineNode.Entry(key = "match", inlineValue = match.trim().ifEmpty { keyword.trim() }),
+            MseLineNode.Entry(key = "mode", inlineValue = mode.ifBlank { "custom" }),
+        )
+        if (reminder.contains('\n')) {
+            children.add(MseLineNode.Entry(key = "reminder", multilineValue = reminder.split("\n")))
+        } else {
+            children.add(MseLineNode.Entry(key = "reminder", inlineValue = reminder.trim()))
+        }
+        if (rules.isNotBlank()) {
+            children.add(MseLineNode.Entry(key = "rules", inlineValue = rules.trim()))
+        }
+        return MseLineNode.Entry(key = "keyword", isBlock = true, children = children)
     }
 
     fun withStylingFontOverride(stylesheetId: String, fontFamily: String): MseSetDocument {
@@ -240,6 +419,21 @@ data class MseCardView(
     val toughness: String get() = field("toughness")
     val illustrator: String get() = field("illustrator")
 
+    val fullTypeLine: String
+        get() = when {
+            superType.isNotBlank() && subType.isNotBlank() -> "$superType — $subType"
+            superType.isNotBlank() -> superType
+            subType.isNotBlank() -> subType
+            else -> ""
+        }
+
+    val ptSummary: String
+        get() = if (power.isNotBlank() || toughness.isNotBlank()) {
+            "${power.ifBlank { "0" }} / ${toughness.ifBlank { "0" }}"
+        } else {
+            ""
+        }
+
     /**
      * Strictly null when no artwork is embedded in the `.mse-set`.
      */
@@ -257,11 +451,13 @@ data class MseCardView(
  * Complete lossless in-memory `.mse-set` ZIP archive.
  */
 data class MseSetArchive(
+    val id: String = "set_active",
     val displayName: String,
     val document: MseSetDocument,
     val setEntryName: String = "set",
     val embeddedBlobs: Map<String, ByteArray> = emptyMap(),
     val sourceUri: String? = null,
+    val localFilePath: String? = null,
 ) {
     fun getArtBytes(cardIndex: Int): ByteArray? {
         val imageName = document.cards.getOrNull(cardIndex)?.image ?: return null

@@ -15,7 +15,10 @@ import com.example.data.bridge.TemplateValidateResponse
 import com.example.data.fonts.FontEntry
 import com.example.data.mse.MseHitbox
 import com.example.data.mse.MseSetArchive
+import com.example.data.mse.MseSetInfo
+import com.example.data.mse.MseStyleOption
 import com.example.data.mse.MseStyleSpec
+import com.example.data.mse.RecentSetRecord
 import com.example.data.settings.EngineSplit
 import com.example.data.settings.PhysicalCardProfile
 import com.example.data.settings.StudioSettings
@@ -77,9 +80,11 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     val settings: StateFlow<StudioSettings> = container.settingsRepository.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StudioSettings())
 
-    val archive: StateFlow<MseSetArchive> = container.mseWorkspaceRepository.archive
+    val archive: StateFlow<MseSetArchive?> = container.mseWorkspaceRepository.archive
     val activeCardIndex: StateFlow<Int> = container.mseWorkspaceRepository.activeCardIndex
     val styleSpec: StateFlow<MseStyleSpec> = container.mseWorkspaceRepository.styleSpec
+    val recentSets: StateFlow<List<RecentSetRecord>> = container.mseWorkspaceRepository.recentSets
+    val hasUnsavedChanges: StateFlow<Boolean> = container.mseWorkspaceRepository.hasUnsavedChanges
 
     val fonts: StateFlow<List<FontEntry>> = container.fontCatalogRepository.unifiedFontsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -122,7 +127,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                 container.fontCatalogRepository.updateStyleReferencedFonts(spec.referencedFonts)
             }
         }
-        checkBridgeHealth(autoRenderIfOnline = true)
+        checkBridgeHealth(autoRenderIfOnline = false)
     }
 
     // ---- Bridge Diagnostics & Rendering ----
@@ -139,7 +144,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                         latencyMs = res.latencyMs,
                     )
                     refreshBridgeTemplatesAndFonts()
-                    if (autoRenderIfOnline) {
+                    if (autoRenderIfOnline && archive.value != null) {
                         requestBridgeRender()
                     }
                 }
@@ -162,16 +167,16 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                         detail = "HTTP ${res.code}: ${res.body.ifBlank { "Bridge rejected /health" }}",
                         latencyMs = res.latencyMs,
                     )
-                    _renderState.value = CardRenderState.Error("Bridge HTTP ${res.code}: ${res.body}")
+                    _renderState.value = CardRenderState.Error("Bridge HTTP ${res.code}")
                 }
 
                 is BridgeResult.ParseError -> {
                     _bridgeHealth.value = BridgeHealthState.Offline(
                         baseUrl = baseUrl,
-                        detail = "Parse error: ${res.detail}",
+                        detail = res.detail,
                         latencyMs = res.latencyMs,
                     )
-                    _renderState.value = CardRenderState.Error("Bridge parse error: ${res.detail}")
+                    _renderState.value = CardRenderState.Error(res.detail)
                 }
             }
         }
@@ -189,11 +194,11 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
 
     fun requestBridgeRender() {
         viewModelScope.launch {
+            val currentArchive = archive.value ?: return@launch
+            val zipBytes = container.mseWorkspaceRepository.serializeCurrentArchiveBytes() ?: return@launch
             _renderState.value = CardRenderState.Rendering
-            val currentArchive = archive.value
             val cardIdx = activeCardIndex.value
             val currentSettings = settings.value
-            val zipBytes = container.mseWorkspaceRepository.serializeCurrentArchiveBytes()
             val sheetId = currentArchive.document.stylesheet
 
             when (
@@ -211,9 +216,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                         BitmapFactory.decodeByteArray(data.pngBytes, 0, data.pngBytes.size)
                     }
                     if (bitmap == null) {
-                        _renderState.value = CardRenderState.Error(
-                            "MSE Bridge returned invalid PNG bytes (${data.pngBytes.size} bytes)."
-                        )
+                        _renderState.value = CardRenderState.Error("Bridge returned unreadable PNG bytes.")
                         return@launch
                     }
 
@@ -260,13 +263,11 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                 }
 
                 is BridgeResult.HttpError -> {
-                    _renderState.value = CardRenderState.Error(
-                        "Render failed (HTTP ${res.code}): ${res.body}"
-                    )
+                    _renderState.value = CardRenderState.Error("Render HTTP ${res.code}: ${res.body}")
                 }
 
                 is BridgeResult.ParseError -> {
-                    _renderState.value = CardRenderState.Error("Render parse error: ${res.detail}")
+                    _renderState.value = CardRenderState.Error("Render error: ${res.detail}")
                 }
             }
         }
@@ -292,17 +293,9 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                     )
                 }
 
-                is BridgeResult.Offline -> {
-                    _messages.tryEmit("Bridge offline at ${res.baseUrl} — cannot run magicseteditor --cli.")
-                }
-
-                is BridgeResult.HttpError -> {
-                    _messages.tryEmit("Validation HTTP ${res.code}: ${res.body}")
-                }
-
-                is BridgeResult.ParseError -> {
-                    _messages.tryEmit("Validation parse error: ${res.detail}")
-                }
+                is BridgeResult.Offline -> _messages.tryEmit("Bridge offline — start Termux MSE Bridge first.")
+                is BridgeResult.HttpError -> _messages.tryEmit("Validation HTTP ${res.code}")
+                is BridgeResult.ParseError -> _messages.tryEmit("Validation error: ${res.detail}")
             }
         }
     }
@@ -312,8 +305,8 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun saveBridgeBaseUrl(rawUrl: String) {
         viewModelScope.launch {
             container.settingsRepository.updateBridgeBaseUrl(rawUrl)
-            _messages.tryEmit("Bridge URL updated.")
-            checkBridgeHealth(autoRenderIfOnline = true)
+            _messages.tryEmit("Bridge URL saved.")
+            checkBridgeHealth(autoRenderIfOnline = archive.value != null)
         }
     }
 
@@ -338,7 +331,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun updateEngineSplit(split: EngineSplit) {
         viewModelScope.launch {
             container.settingsRepository.updateEngineSplit(split)
-            if (_bridgeHealth.value is BridgeHealthState.Online) {
+            if (_bridgeHealth.value is BridgeHealthState.Online && archive.value != null) {
                 requestBridgeRender()
             }
         }
@@ -350,7 +343,113 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    // ---- Lossless .mse-set & .mse-style Workspace ----
+    // ---- Welcome Window & Set Lifecycle ----
+
+    fun createNewSetFromWizard(
+        title: String,
+        gameId: String,
+        styleOption: MseStyleOption,
+        onOpened: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            container.settingsRepository.updateEngineSplit(styleOption.engineSplit)
+            container.settingsRepository.updatePhysicalProfile(styleOption.physicalProfile)
+            container.mseWorkspaceRepository.createNewBlankSet(
+                title = title,
+                game = gameId,
+                stylesheet = styleOption.stylesheetId,
+                styleOption = styleOption,
+            )
+            _renderState.value = CardRenderState.Idle
+            onOpened()
+            if (_bridgeHealth.value is BridgeHealthState.Online) {
+                requestBridgeRender()
+            }
+        }
+    }
+
+    fun openMseSetUri(uri: Uri, onOpened: () -> Unit = {}) {
+        viewModelScope.launch {
+            val result = container.mseWorkspaceRepository.openSetFromUri(uri)
+            result.onSuccess { loaded ->
+                _renderState.value = CardRenderState.Idle
+                _messages.tryEmit("Opened ${loaded.document.setTitle} (${loaded.document.cards.size} cards)")
+                onOpened()
+                if (_bridgeHealth.value is BridgeHealthState.Online) {
+                    requestBridgeRender()
+                }
+            }.onFailure { err ->
+                _messages.tryEmit("Could not open set: ${err.message}")
+            }
+        }
+    }
+
+    fun openRecentSet(record: RecentSetRecord, onOpened: () -> Unit) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.openRecentSet(record)
+                .onSuccess {
+                    _renderState.value = CardRenderState.Idle
+                    onOpened()
+                    if (_bridgeHealth.value is BridgeHealthState.Online) {
+                        requestBridgeRender()
+                    }
+                }
+                .onFailure { err ->
+                    _messages.tryEmit("Could not open recent set: ${err.message}")
+                }
+        }
+    }
+
+    fun saveActiveSet(onSaved: () -> Unit = {}) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.saveActiveSet()
+                .onSuccess {
+                    _messages.tryEmit("Saved ${it.document.setTitle}.")
+                    onSaved()
+                }
+                .onFailure { err ->
+                    _messages.tryEmit("Save failed: ${err.message}")
+                }
+        }
+    }
+
+    fun exportMseSetUri(uri: Uri) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.exportSetToUri(uri)
+                .onSuccess { _messages.tryEmit("Saved .mse-set file.") }
+                .onFailure { _messages.tryEmit("Save failed: ${it.message}") }
+        }
+    }
+
+    fun closeActiveSet(onClosed: () -> Unit) {
+        container.mseWorkspaceRepository.closeActiveSet()
+        _renderState.value = CardRenderState.Idle
+        onClosed()
+    }
+
+    fun loadMseStyleUri(uri: Uri) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.loadStyleFromUri(uri)
+                .onSuccess { parsed ->
+                    _messages.tryEmit("Loaded style '${parsed.shortName}' (${parsed.cardWidthPx}×${parsed.cardHeightPx} @ ${parsed.cardDpi} DPI)")
+                }
+                .onFailure { _messages.tryEmit("Could not load .mse-style: ${it.message}") }
+        }
+    }
+
+    fun switchStylesheet(option: MseStyleOption) {
+        viewModelScope.launch {
+            container.settingsRepository.updateEngineSplit(option.engineSplit)
+            container.settingsRepository.updatePhysicalProfile(option.physicalProfile)
+            container.mseWorkspaceRepository.switchStylesheet(option)
+            _messages.tryEmit("Style set to ${option.displayName}.")
+            if (_bridgeHealth.value is BridgeHealthState.Online) {
+                requestBridgeRender()
+            }
+        }
+    }
+
+    // ---- Cards, Set Info & Keywords Editing ----
 
     fun selectCard(index: Int) {
         container.mseWorkspaceRepository.selectCard(index)
@@ -361,57 +460,30 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
 
     fun addBlankCard() {
         viewModelScope.launch {
-            val idx = container.mseWorkspaceRepository.addBlankCard()
-            _messages.tryEmit("Added Card #${idx + 1} (art strictly blank).")
+            container.mseWorkspaceRepository.addBlankCard()
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
             }
         }
     }
 
-    fun createNewBlankSet(title: String, game: String, stylesheet: String) {
+    fun duplicateCard(cardIndex: Int) {
         viewModelScope.launch {
-            container.mseWorkspaceRepository.createNewBlankSet(title, game, stylesheet)
-            _messages.tryEmit("Created blank set '$title' (art strictly blank).")
+            container.mseWorkspaceRepository.duplicateCard(cardIndex)
+            _messages.tryEmit("Duplicated card.")
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
             }
         }
     }
 
-    fun openMseSetUri(uri: Uri) {
+    fun deleteCard(cardIndex: Int) {
         viewModelScope.launch {
-            val result = container.mseWorkspaceRepository.openSetFromUri(uri)
-            result.onSuccess { loaded ->
-                _messages.tryEmit(
-                    "Opened ${loaded.displayName} (${loaded.document.cards.size} card(s), ${loaded.embeddedBlobs.size} blob(s))."
-                )
-                if (_bridgeHealth.value is BridgeHealthState.Online) {
-                    requestBridgeRender()
-                }
-            }.onFailure { err ->
-                _messages.tryEmit("Failed to open .mse-set: ${err.message}")
+            container.mseWorkspaceRepository.deleteCard(cardIndex)
+            _messages.tryEmit("Deleted card.")
+            if (_bridgeHealth.value is BridgeHealthState.Online) {
+                requestBridgeRender()
             }
-        }
-    }
-
-    fun exportMseSetUri(uri: Uri) {
-        viewModelScope.launch {
-            container.mseWorkspaceRepository.exportSetToUri(uri)
-                .onSuccess { _messages.tryEmit("Exported lossless .mse-set archive.") }
-                .onFailure { _messages.tryEmit("Export failed: ${it.message}") }
-        }
-    }
-
-    fun loadMseStyleUri(uri: Uri) {
-        viewModelScope.launch {
-            container.mseWorkspaceRepository.loadStyleFromUri(uri)
-                .onSuccess { parsed ->
-                    _messages.tryEmit(
-                        "Loaded .mse-style '${parsed.shortName}' (${parsed.cardWidthPx}×${parsed.cardHeightPx} @ ${parsed.cardDpi} DPI, ${parsed.hitboxes.size} hitboxes, ${parsed.referencedFonts.size} font(s))."
-                    )
-                }
-                .onFailure { _messages.tryEmit("Failed to parse .mse-style: ${it.message}") }
         }
     }
 
@@ -428,13 +500,28 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun updateActiveCardFields(updates: Map<String, String?>) {
+        viewModelScope.launch {
+            updates.forEach { (k, v) ->
+                container.mseWorkspaceRepository.updateCardField(
+                    cardIndex = activeCardIndex.value,
+                    fieldKey = k,
+                    newValue = v,
+                )
+            }
+            if (_bridgeHealth.value is BridgeHealthState.Online) {
+                requestBridgeRender()
+            }
+        }
+    }
+
     fun embedCroppedCardArt(imageBytes: ByteArray) {
         viewModelScope.launch {
             container.mseWorkspaceRepository.embedCardArt(
                 cardIndex = activeCardIndex.value,
                 imageBytes = imageBytes,
             )
-            _messages.tryEmit("Embedded cropped artwork into .mse-set ZIP.")
+            _messages.tryEmit("Artwork embedded in set.")
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
             }
@@ -444,10 +531,37 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun clearActiveCardArt() {
         viewModelScope.launch {
             container.mseWorkspaceRepository.clearCardArt(activeCardIndex.value)
-            _messages.tryEmit("Cleared artwork — card art field returned strictly to null.")
+            _messages.tryEmit("Artwork cleared.")
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
             }
+        }
+    }
+
+    fun updateSetInfo(info: MseSetInfo) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.updateSetInfo(info)
+        }
+    }
+
+    fun addKeyword(keyword: String, match: String, reminder: String, rules: String) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.addKeyword(keyword, match, reminder, rules)
+            _messages.tryEmit("Added keyword '$keyword'.")
+        }
+    }
+
+    fun updateKeyword(index: Int, keyword: String, match: String, reminder: String, rules: String) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.updateKeyword(index, keyword, match, reminder, rules)
+            _messages.tryEmit("Updated keyword '$keyword'.")
+        }
+    }
+
+    fun deleteKeyword(index: Int) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.deleteKeyword(index)
+            _messages.tryEmit("Deleted keyword.")
         }
     }
 
@@ -459,8 +573,8 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             container.settingsRepository.updateSelectedFontFamily(entry.familyName)
             container.mseWorkspaceRepository.applyFontOverride(entry.familyName)
-            _messages.tryEmit("Applied '${entry.familyName}' to active set styling.")
-            if (_bridgeHealth.value is BridgeHealthState.Online) {
+            _messages.tryEmit("Applied '${entry.familyName}'.")
+            if (_bridgeHealth.value is BridgeHealthState.Online && archive.value != null) {
                 requestBridgeRender()
             }
         }
@@ -475,7 +589,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                 container.settingsRepository.updateSelectedFontFamily(entry.familyName)
                 container.mseWorkspaceRepository.applyFontOverride(entry.familyName)
                 _messages.tryEmit(outcome.message)
-                if (_bridgeHealth.value is BridgeHealthState.Online) {
+                if (_bridgeHealth.value is BridgeHealthState.Online && archive.value != null) {
                     requestBridgeRender()
                 }
             }.onFailure { err ->
@@ -490,14 +604,13 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
             val res = container.fontCatalogRepository.importPurchasedFontUri(uri, expectedFamilyName)
             _isFontBusy.value = false
             res.onSuccess { outcome ->
-                val targetFamily = expectedFamilyName
-                    ?: outcome.importedFamilies.firstOrNull()
+                val targetFamily = expectedFamilyName ?: outcome.importedFamilies.firstOrNull()
                 if (!targetFamily.isNullOrBlank()) {
                     container.settingsRepository.updateSelectedFontFamily(targetFamily)
                     container.mseWorkspaceRepository.applyFontOverride(targetFamily)
                 }
                 _messages.tryEmit(outcome.message)
-                if (_bridgeHealth.value is BridgeHealthState.Online) {
+                if (_bridgeHealth.value is BridgeHealthState.Online && archive.value != null) {
                     requestBridgeRender()
                 }
             }.onFailure { err ->
@@ -544,7 +657,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
             val resolved = results.awaitAll().toMap()
             _commitChecks.value = _commitChecks.value + resolved
             _isCheckingUpdates.value = false
-            _messages.tryEmit("Checked ${resolved.size} upstream repo(s) via GitHub ETag/Atom.")
+            _messages.tryEmit("Checked ${resolved.size} upstream repositories.")
         }
     }
 
@@ -554,59 +667,47 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
             val manifestJson = container.upstreamManifestRepository.exportManifestJson()
             when (val res = container.mseBridgeClient.triggerUpstreamSync(manifestJson)) {
                 is BridgeResult.Success -> {
-                    _messages.tryEmit(
-                        "Delta sync complete (${res.data.syncedSplits.size} split(s), fc-cache=${res.data.fcCacheUpdated})."
-                    )
+                    _messages.tryEmit("Delta sync complete (${res.data.syncedSplits.size} splits).")
                     refreshBridgeTemplatesAndFonts()
                 }
 
-                is BridgeResult.Offline -> {
-                    _messages.tryEmit("Bridge offline at ${res.baseUrl} — start Termux MSE Bridge to run delta sync.")
-                }
-
-                is BridgeResult.HttpError -> {
-                    _messages.tryEmit("Bridge sync HTTP ${res.code}: ${res.body}")
-                }
-
-                is BridgeResult.ParseError -> {
-                    _messages.tryEmit("Bridge sync parse error: ${res.detail}")
-                }
+                is BridgeResult.Offline -> _messages.tryEmit("Bridge offline — start Termux MSE Bridge to sync.")
+                is BridgeResult.HttpError -> _messages.tryEmit("Bridge sync HTTP ${res.code}")
+                is BridgeResult.ParseError -> _messages.tryEmit("Bridge sync error: ${res.detail}")
             }
             _isSyncingBridge.value = false
         }
     }
 
     fun toggleSplitEnabled(splitId: String, enabled: Boolean) {
-        viewModelScope.launch {
-            container.upstreamManifestRepository.toggleSplitEnabled(splitId, enabled)
-        }
+        viewModelScope.launch { container.upstreamManifestRepository.toggleSplitEnabled(splitId, enabled) }
     }
 
     fun updateSplitBranch(splitId: String, branch: String) {
         viewModelScope.launch {
             container.upstreamManifestRepository.updateSplitBranch(splitId, branch)
-            _messages.tryEmit("Updated branch to '$branch'.")
+            _messages.tryEmit("Branch updated to '$branch'.")
         }
     }
 
     fun pinSplitSha(splitId: String, sha: String) {
         viewModelScope.launch {
             container.upstreamManifestRepository.pinSplitSha(splitId, sha)
-            _messages.tryEmit("Pinned commit ${sha.take(7)}.")
+            _messages.tryEmit("Pinned ${sha.take(7)}.")
         }
     }
 
     fun rollbackSplitSha(splitId: String) {
         viewModelScope.launch {
             container.upstreamManifestRepository.rollbackSplitSha(splitId)
-            _messages.tryEmit("Rolled back pinned commit SHA.")
+            _messages.tryEmit("Rolled back pinned commit.")
         }
     }
 
     fun updateWebhookRelayUrl(url: String) {
         viewModelScope.launch {
             container.upstreamManifestRepository.updateWebhookRelayUrl(url)
-            _messages.tryEmit("Saved webhook relay URL to upstream_manifest.json.")
+            _messages.tryEmit("Saved webhook relay URL.")
         }
     }
 
@@ -625,14 +726,14 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                 branch = branch,
                 resourceType = resourceType,
             )
-            _messages.tryEmit("Added Open-Resource Connector for $gameName ($owner/$repo).")
+            _messages.tryEmit("Added connector for $gameName.")
         }
     }
 
     fun removeOpenResourceConnector(id: String) {
         viewModelScope.launch {
             container.upstreamManifestRepository.removeOpenResourceConnector(id)
-            _messages.tryEmit("Removed Open-Resource Connector.")
+            _messages.tryEmit("Removed connector.")
         }
     }
 

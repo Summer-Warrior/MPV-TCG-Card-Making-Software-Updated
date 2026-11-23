@@ -55,6 +55,7 @@ import com.example.data.upstream.OpenResourceConnector
 import com.example.data.upstream.UpdateCheckState
 import com.example.data.upstream.UpstreamManifest
 import com.example.data.upstream.UpstreamRepoSplit
+import com.example.ui.theme.JetBrainsMonoFamily
 
 /**
  * Upstream Splits & Manifest Manager Screen (Section 3 & Phase 1.6).
@@ -99,17 +100,12 @@ fun UpstreamScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.upstream_title),
-                            style = MaterialTheme.typography.headlineSmall,
-                        )
-                        Text(
-                            text = "Read-only upstream/ splits vs. custom_templates/ override layer",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text(
+                        text = "Read-only upstream splits & local template overrides",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
                     IconButton(
                         onClick = { showRawJsonDialog = true },
                         modifier = Modifier.testTag("upstream_edit_json_button"),
@@ -125,6 +121,7 @@ fun UpstreamScreen(
                     Button(
                         onClick = onCheckGitHubUpdates,
                         enabled = !isCheckingUpdates,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier
                             .weight(1f)
                             .testTag("upstream_check_github_button"),
@@ -142,12 +139,13 @@ fun UpstreamScreen(
                             )
                         }
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.check_github_updates))
+                        Text("Check GitHub", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
 
                     OutlinedButton(
                         onClick = onTriggerBridgeDeltaSync,
                         enabled = !isSyncingBridge,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier
                             .weight(1f)
                             .testTag("upstream_bridge_sync_button"),
@@ -165,7 +163,7 @@ fun UpstreamScreen(
                             )
                         }
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.trigger_bridge_sync))
+                        Text("Sync Bridge", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -353,7 +351,9 @@ fun UpstreamScreen(
                     onValueChange = { jsonDraft = it },
                     minLines = 10,
                     maxLines = 16,
-                    textStyle = MaterialTheme.typography.labelSmall,
+                    textStyle = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = JetBrainsMonoFamily,
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 )
             },

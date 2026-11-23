@@ -1,55 +1,61 @@
 <resources>
     <string name="app_name">TCG Studio</string>
 
-    <!-- Navigation -->
-    <string name="nav_editor">1:1 Editor</string>
-    <string name="nav_fonts">Fonts</string>
-    <string name="nav_upstream">Upstream</string>
-    <string name="nav_bridge">Bridge</string>
+    <!-- Welcome Window -->
+    <string name="welcome_title">Magic Set Editor</string>
+    <string name="welcome_subtitle">TCG Studio</string>
+    <string name="welcome_new_set">New Set</string>
+    <string name="welcome_new_set_desc">Choose a card game and template style</string>
+    <string name="welcome_open_set">Open Set (.mse-set)</string>
+    <string name="welcome_open_set_desc">Browse device storage for an existing set</string>
+    <string name="welcome_open_last">Open Last Set</string>
+    <string name="welcome_recent_sets">Recent Sets</string>
+    <string name="welcome_no_recent_sets">No recent sets yet</string>
+    <string name="tool_fonts">Fonts &amp; Licenses</string>
+    <string name="tool_upstream">Upstream Splits</string>
+    <string name="tool_bridge">Bridge &amp; Termux</string>
+
+    <!-- Workspace Tabs -->
+    <string name="tab_cards">Cards</string>
+    <string name="tab_set_info">Set Info</string>
+    <string name="tab_style">Style</string>
+    <string name="tab_keywords">Keywords</string>
 
     <!-- Bridge & Diagnostics -->
-    <string name="bridge_online">MSE Bridge Online</string>
-    <string name="bridge_offline">MSE Bridge Offline</string>
-    <string name="bridge_checking">Checking MSE Bridge…</string>
-    <string name="bridge_diagnostics_title">Termux MSE Bridge &amp; Diagnostics</string>
+    <string name="bridge_status_online">Online</string>
+    <string name="bridge_status_offline">Offline</string>
+    <string name="bridge_status_checking">Checking…</string>
+    <string name="bridge_diagnostics_title">MSE Bridge &amp; Termux Setup</string>
     <string name="bridge_url_label">Bridge Base URL</string>
-    <string name="bridge_test_action">Test Connection</string>
     <string name="bridge_save_url">Save URL</string>
-    <string name="bridge_termux_help_title">Termux ARM64 MSE Bridge Startup</string>
-    <string name="bridge_offline_notice">Rendered card PNGs come exclusively from your local Termux MSE Bridge. Local .mse-set editing, .mse-style hitbox inspection, font licensing, and upstream manifest management remain 100% functional offline.</string>
+    <string name="bridge_termux_help_title">Termux ARM64 Launch Commands</string>
+    <string name="bridge_offline_notice">Card frames are rendered exclusively by your local Termux MSE Bridge. Set editing, card tables, font licensing, and upstream pack sync work locally while offline.</string>
 
-    <!-- 1:1 IRL Editor -->
-    <string name="snap_irl_button">Snap 1:1 IRL</string>
+    <!-- Card Editor -->
+    <string name="snap_irl_short">1:1 IRL</string>
     <string name="calibration_label">Physical Card Calibration</string>
-    <string name="calibration_hint">Hold a real physical card against the glass and adjust until edges match exactly.</string>
-    <string name="import_art_action">Import Art</string>
+    <string name="calibration_hint">Hold a physical card against the glass and adjust until edges align.</string>
+    <string name="tap_to_add_artwork">Tap to add artwork</string>
     <string name="clear_art_action">Clear Art</string>
-    <string name="open_mse_set">Open .mse-set</string>
-    <string name="export_mse_set">Export .mse-set</string>
-    <string name="load_mse_style">Load .mse-style</string>
-    <string name="new_card_action">New Card</string>
-    <string name="art_empty_label">Art Field: Empty (null)</string>
-    <string name="crop_art_title">Crop Art to Template Box</string>
-    <string name="apply_crop">Embed Art in Set</string>
+    <string name="new_card_short">New</string>
+    <string name="crop_art_title">Crop Artwork</string>
+    <string name="apply_crop">Use Artwork</string>
     <string name="cancel">Cancel</string>
     <string name="save">Save</string>
+    <string name="close">Close</string>
 
     <!-- Fonts & Commercial Licensing -->
-    <string name="font_picker_title">Font Picker</string>
+    <string name="font_picker_title">Fonts &amp; Licenses</string>
     <string name="font_search_placeholder">Search fonts, foundries, packs…</string>
-    <string name="filter_all">All</string>
-    <string name="filter_ready">Ready ✅</string>
-    <string name="filter_free">Free ⬇️</string>
-    <string name="filter_paid">Paid 🔒</string>
     <string name="commercial_modal_title">Commercial Font License Required</string>
     <string name="open_browser_purchase">Open Browser to Purchase License</string>
     <string name="import_purchased_font">Import Purchased Font (.ttf / .otf / .zip)</string>
 
     <!-- Upstream Splits -->
-    <string name="upstream_title">Upstream Splits &amp; Manifest</string>
-    <string name="check_github_updates">Check GitHub Updates</string>
-    <string name="trigger_bridge_sync">Delta Sync Bridge</string>
-    <string name="add_connector">Add Open Connector</string>
-    <string name="pin_sha">Pin SHA</string>
+    <string name="upstream_title">Upstream Splits &amp; Updates</string>
+    <string name="check_github_updates">Check Updates</string>
+    <string name="trigger_bridge_sync">Delta Sync</string>
+    <string name="add_connector">Add Connector</string>
+    <string name="pin_sha">Pin</string>
     <string name="rollback_sha">Rollback</string>
 </resources>

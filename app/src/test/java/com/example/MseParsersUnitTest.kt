@@ -121,4 +121,49 @@ class MseParsersUnitTest {
         assertTrue(spec.referencedFonts.contains("Matrix II"))
         assertTrue(spec.referencedFonts.contains("ITC Stone Serif"))
     }
+
+    @Test
+    fun setInfoKeywordsAndCardMutationsPreserveLosslessFormatAndNullArt() {
+        val blank = MseSetParser.createBlankArchive(
+            game = "magic",
+            stylesheet = "m15-altered",
+            title = "Clockwork Horizon",
+        )
+        val withInfo = blank.document.withSetInfoUpdated(
+            blank.document.setInfo.copy(
+                artist = "Studio Collective",
+                setCode = "CWH",
+            )
+        )
+        assertEquals("Clockwork Horizon", withInfo.setInfo.title)
+        assertEquals("Studio Collective", withInfo.setInfo.artist)
+        assertEquals("CWH", withInfo.setInfo.setCode)
+
+        val withKw = withInfo.withAddedKeyword(
+            keyword = "Chronocast",
+            match = "Chronocast <cost>",
+            reminder = "You may cast this spell from exile for its chronocast cost.",
+            mode = "custom",
+        )
+        assertEquals(1, withKw.keywords.size)
+        assertEquals("Chronocast", withKw.keywords.first().keyword)
+
+        val withCard = withKw.withCardFieldUpdated(0, "name", "Aether Astrolabe")
+        val duplicated = withCard.withDuplicatedCard(0, "2026-11-22 14:00:00")
+        assertEquals(2, duplicated.cards.size)
+        assertEquals("Aether Astrolabe", duplicated.cards[1].name)
+        assertNull("Duplicated blank-art card MUST keep null image", duplicated.cards[1].image)
+
+        val afterDelete = duplicated.withDeletedCard(1)
+        assertEquals(1, afterDelete.cards.size)
+
+        val afterKwDelete = afterDelete.withDeletedKeyword(0)
+        assertTrue(afterKwDelete.keywords.isEmpty())
+
+        val roundTrip = MseSetParser.parseSetText(MseSetParser.serializeSetText(afterKwDelete))
+        assertEquals("Clockwork Horizon", roundTrip.setInfo.title)
+        assertEquals("CWH", roundTrip.setInfo.setCode)
+        assertEquals("Aether Astrolabe", roundTrip.cards.first().name)
+        assertNull(roundTrip.cards.first().image)
+    }
 }

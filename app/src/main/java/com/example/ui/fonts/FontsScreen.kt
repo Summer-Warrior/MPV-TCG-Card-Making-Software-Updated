@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.fonts.FontAvailability
 import com.example.data.fonts.FontEntry
@@ -59,7 +60,7 @@ fun FontsScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Row(
@@ -67,24 +68,24 @@ fun FontsScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Font Catalog & Licensing",
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-                Text(
-                    text = "$readyCount ready • $paidCount commercial foundry entries",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Text(
+                text = "$readyCount ready • $paidCount licensed",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 IconButton(
                     onClick = onRefreshBridgeFonts,
                     modifier = Modifier.testTag("fonts_refresh_bridge_button"),
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh MSE Bridge fonts")
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh engine fonts")
                 }
                 FilledTonalButton(
                     onClick = {
@@ -106,7 +107,7 @@ fun FontsScreen(
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text("Import Font")
+                    Text("Import", maxLines = 1)
                 }
             }
         }

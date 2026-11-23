@@ -52,6 +52,9 @@ import com.example.data.mse.MseStyleSpec
 import com.example.data.settings.EngineSplit
 import com.example.data.settings.StudioSettings
 import com.example.ui.BridgeHealthState
+import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.StatusConnected
+import com.example.ui.theme.StatusOfflineAmber
 
 private const val TERMUX_STARTUP_SNIPPET = """# Inside Termux ARM64 (Ubuntu proot / native ARM64):
 # 1. Verify upstream MSE CLI binaries:
@@ -100,12 +103,6 @@ fun BridgeDiagnosticsScreen(
         contentPadding = PaddingValues(vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item {
-            Text(
-                text = stringResource(R.string.bridge_diagnostics_title),
-                style = MaterialTheme.typography.headlineSmall,
-            )
-        }
 
         // ---- Connection & Base URL Card ----
         item {
@@ -134,19 +131,19 @@ fun BridgeDiagnosticsScreen(
                                 is BridgeHealthState.Online -> Icon(
                                     Icons.Default.CheckCircle,
                                     contentDescription = "Online",
-                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    tint = StatusConnected,
                                 )
 
                                 is BridgeHealthState.Offline -> Icon(
                                     Icons.Default.ErrorOutline,
                                     contentDescription = "Offline",
-                                    tint = MaterialTheme.colorScheme.error,
+                                    tint = StatusOfflineAmber,
                                 )
                             }
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 text = when (bridgeHealth) {
-                                    is BridgeHealthState.Checking -> "Checking /health…"
+                                    is BridgeHealthState.Checking -> "Checking engine…"
                                     is BridgeHealthState.Online -> "Connected (${bridgeHealth.latencyMs}ms)"
                                     is BridgeHealthState.Offline -> "Offline (${bridgeHealth.latencyMs}ms)"
                                 },
@@ -164,19 +161,19 @@ fun BridgeDiagnosticsScreen(
                     when (bridgeHealth) {
                         is BridgeHealthState.Online -> {
                             Text(
-                                text = "Engines: mse_modern=${bridgeHealth.response.engines.mseModern}, " +
-                                    "mse_legacy=${bridgeHealth.response.engines.mseLegacy}\n" +
+                                text = "Engines: Modern=${bridgeHealth.response.engines.mseModern}, " +
+                                    "Legacy=${bridgeHealth.response.engines.mseLegacy}\n" +
                                     "Installed splits: ${bridgeHealth.response.installedSplits.joinToString(", ").ifEmpty { "none" }}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.tertiary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = StatusConnected,
                             )
                         }
 
                         is BridgeHealthState.Offline -> {
                             Text(
-                                text = "GET ${bridgeHealth.baseUrl}/health failed: ${bridgeHealth.detail}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error,
+                                text = "Unable to reach ${bridgeHealth.baseUrl}/health (${bridgeHealth.detail}). Start the Termux bridge below for live MSE rendering.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
 
@@ -212,7 +209,7 @@ fun BridgeDiagnosticsScreen(
                             },
                             modifier = Modifier.testTag("diagnostics_reset_url_button"),
                         ) {
-                            Text("Reset 127.0.0.1")
+                            Text("Reset", maxLines = 1)
                         }
                     }
                 }
@@ -311,7 +308,9 @@ fun BridgeDiagnosticsScreen(
                     ) {
                         Text(
                             text = TERMUX_STARTUP_SNIPPET,
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = JetBrainsMonoFamily,
+                            ),
                             color = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.padding(10.dp),
                         )
@@ -386,7 +385,9 @@ fun BridgeDiagnosticsScreen(
                         label = { Text(".mse-style Source") },
                         minLines = 4,
                         maxLines = 8,
-                        textStyle = MaterialTheme.typography.labelSmall,
+                        textStyle = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = JetBrainsMonoFamily,
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Button(

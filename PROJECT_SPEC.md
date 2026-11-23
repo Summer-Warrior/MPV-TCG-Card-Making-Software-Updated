@@ -97,3 +97,13 @@ Implement **Phase 1 completely with real, compilable Kotlin + Jetpack Compose co
 * **Phase 3 (DO NOT BUILD YET):** DataEditorX SQLite `.cdb`/`.db` editor, `cardinfo`/`setcode` parser, `.cdb` ↔ `.mse-set` sync, and Card-ID-linked mobile Code Editor.
 * **Phase 4 (DO NOT BUILD YET):** FTS5 Living Rulebook + non-destructive Custom Rules overrides + MSE keyword/script linking + AI Frame Studio with real MSE `--cli` validation loop + Open-Resource auto-updaters.
 * **Phase 5 (DO NOT BUILD YET):** Pluggable `EngineProfile` adapter for custom TCG engine export.
+
+---
+
+## 9. AUTHENTIC MSE WELCOME WINDOW & CLASSIC TABBED WORKSPACE UI SPECIFICATION
+All phases (Phases 1–5) MUST preserve this clean, responsive (360dp–412dp phone-first) Magic Set Editor 2 UX:
+1. **Startup — Authentic MSE Welcome Window:** Launch into the MSE Welcome Window (never cold-start directly into an Untitled Set wireframe) featuring a compact header (`Magic Set Editor — TCG Studio` + clickable Engine Status Pill), primary actions (**New Set** 2-step Game → Style wizard, **Open Set (`.mse-set`)**, **Open Last Set / Recent Sets** listing only real user sets), and a compact secondary tools row (**Fonts & Licenses**, **Upstream Splits**, **Bridge & Termux**).
+2. **Main Set Window — Classic MSE Tabbed Workspace:** Compact single-row Top App Bar (Home/Back with unsaved-changes check, Set Title + `game • style` subtitle, clickable Bridge Status Dot, Font Picker icon, and Overflow menu) above the 4 classic MSE tabs: **Cards**, **Set Info**, **Style**, and **Keywords**.
+3. **Zero-Overlap 1:1 IRL `Cards` Stage:** Never stamp floating diagnostic pills or red banners over the card face. When the Bridge is ONLINE, render the exact PNG from `POST /sets/render` scaled by hardware `xdpi`/`ydpi` × calibration with invisible aligned `.mse-style` tap hitboxes. When the Bridge is OFFLINE, render a clean non-overlapping structured card layout (`Header Row` → `Artwork Dropzone` → `Type Line` → `Rules & Flavor Box` → dedicated `Footer Row` with Illustrator and `P / T` pill) with strictly empty artwork (`image == null`) until imported. Place a slim `36.dp` scale/zoom bar cleanly BELOW the card and a compact non-clipping MSE bottom card bar (`<` | `Card 1 / N` opening the expandable MSE Card List Table sheet | `>` | `+ New` | Art) at the bottom.
+4. **Zero Developer Jargon & Cohesive Dark Graphite Theme:** Use a refined dark graphite/slate MSE studio theme with warm gold/amber accents, 1dp borders, and clean sans-serif UI typography (no debug monospace walls or raw field placeholders).
+

@@ -40,6 +40,12 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.example.R
 
+sealed class CardFieldEditTarget {
+    data class SingleField(val fieldKey: String, val initialValue: String) : CardFieldEditTarget()
+    data class TypeLine(val superType: String, val subType: String) : CardFieldEditTarget()
+    data class PowerToughness(val power: String, val toughness: String) : CardFieldEditTarget()
+}
+
 private data class MseFormattingToken(
     val label: String,
     val insertText: String,
@@ -47,11 +53,7 @@ private data class MseFormattingToken(
     val wrapEnd: String? = null,
 )
 
-private val MSE_TOKENS = listOf(
-    MseFormattingToken("<b>Bold</b>", "", "<b>", "</b>"),
-    MseFormattingToken("<i>Italic</i>", "", "<i>", "</i>"),
-    MseFormattingToken("<sym>", "", "<sym>", "</sym>"),
-    MseFormattingToken("<kw-a>", "", "<kw-a>", "</kw-a>"),
+private val TEXT_MSE_TOKENS = listOf(
     MseFormattingToken("{T}", "<sym>T</sym>"),
     MseFormattingToken("{W}", "<sym>W</sym>"),
     MseFormattingToken("{U}", "<sym>U</sym>"),
@@ -60,34 +62,36 @@ private val MSE_TOKENS = listOf(
     MseFormattingToken("{G}", "<sym>G</sym>"),
     MseFormattingToken("{C}", "<sym>C</sym>"),
     MseFormattingToken("{1}", "<sym>1</sym>"),
+    MseFormattingToken("<i>", "", "<i>", "</i>"),
+    MseFormattingToken("<b>", "", "<b>", "</b>"),
     MseFormattingToken("—", " — "),
     MseFormattingToken("•", "• "),
 )
 
+private val COST_MSE_TOKENS = listOf(
+    MseFormattingToken("{1}", "1"),
+    MseFormattingToken("{2}", "2"),
+    MseFormattingToken("{X}", "X"),
+    MseFormattingToken("{W}", "W"),
+    MseFormattingToken("{U}", "U"),
+    MseFormattingToken("{B}", "B"),
+    MseFormattingToken("{R}", "R"),
+    MseFormattingToken("{G}", "G"),
+    MseFormattingToken("{C}", "C"),
+)
+
 /**
- * Material 3 ModalBottomSheet editor triggered when tapping any text hitbox on the 1:1 card.
- * Includes an MSE2 formatting & symbol bar and writes updates losslessly into the `.mse-set`.
+ * Clean Material 3 ModalBottomSheet editor for card text, cost, type line, rules/flavor, or P/T.
+ * Uses clean human-readable labels and MSE symbol helper chips, writing losslessly to `.mse-set`.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FieldEditorBottomSheet(
-    fieldKey: String,
-    initialValue: String,
-    hitboxSummary: String,
+    target: CardFieldEditTarget,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit,
+    onSaveFields: (Map<String, String?>) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var textValue by remember(fieldKey, initialValue) {
-        mutableStateOf(
-            TextFieldValue(
-                text = initialValue,
-                selection = TextRange(initialValue.length),
-            )
-        )
-    }
-
-    val isMultilineField = fieldKey in setOf("rule text", "flavor text", "notes", "text")
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -103,84 +107,242 @@ fun FieldEditorBottomSheet(
                 .imePadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Edit MSE Field: $fieldKey",
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                    Text(
-                        text = hitboxSummary,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            when (target) {
+                is CardFieldEditTarget.SingleField -> {
+                    SingleFieldEditorBody(
+                        fieldKey = target.fieldKey,
+                        initialValue = target.initialValue,
+                        onDismiss = onDismiss,
+                        onSave = { value -> onSaveFields(mapOf(target.fieldKey to value)) },
                     )
                 }
-                IconButton(onClick = onDismiss, modifier = Modifier.testTag("field_editor_close")) {
-                    Icon(Icons.Default.Close, contentDescription = "Close editor")
-                }
-            }
 
-            // MSE Formatting & Symbol Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                MSE_TOKENS.forEach { token ->
-                    AssistChip(
-                        onClick = {
-                            textValue = applyMseToken(textValue, token)
+                is CardFieldEditTarget.TypeLine -> {
+                    TypeLineEditorBody(
+                        initialSuperType = target.superType,
+                        initialSubType = target.subType,
+                        onDismiss = onDismiss,
+                        onSave = { superT, subT ->
+                            onSaveFields(mapOf("super type" to superT, "sub type" to subT))
                         },
-                        label = {
-                            Text(
-                                text = token.label,
-                                style = MaterialTheme.typography.labelMedium,
-                            )
-                        },
-                        modifier = Modifier.testTag("mse_token_${token.label}"),
                     )
                 }
-            }
 
-            OutlinedTextField(
-                value = textValue,
-                onValueChange = { textValue = it },
-                label = { Text(fieldKey) },
-                placeholder = { Text("Enter $fieldKey value (MSE tags preserved losslessly)") },
-                minLines = if (isMultilineField) 4 else 1,
-                maxLines = if (isMultilineField) 8 else 2,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("field_editor_input"),
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
-            ) {
-                OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.testTag("field_editor_cancel"),
-                ) {
-                    Text(stringResource(R.string.cancel))
-                }
-                Button(
-                    onClick = { onSave(textValue.text) },
-                    modifier = Modifier.testTag("field_editor_save"),
-                ) {
-                    Icon(Icons.Default.Check, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.save))
+                is CardFieldEditTarget.PowerToughness -> {
+                    PowerToughnessEditorBody(
+                        initialPower = target.power,
+                        initialToughness = target.toughness,
+                        onDismiss = onDismiss,
+                        onSave = { p, t ->
+                            onSaveFields(mapOf("power" to p, "toughness" to t))
+                        },
+                    )
                 }
             }
             Spacer(Modifier.height(4.dp))
         }
     }
+}
+
+@Composable
+private fun SingleFieldEditorBody(
+    fieldKey: String,
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var textValue by remember(fieldKey, initialValue) {
+        mutableStateOf(
+            TextFieldValue(
+                text = initialValue,
+                selection = TextRange(initialValue.length),
+            )
+        )
+    }
+
+    val title = humanFieldTitle(fieldKey)
+    val isMultiline = fieldKey in setOf("rule text", "flavor text", "notes", "text")
+    val tokens = when (fieldKey) {
+        "casting cost" -> COST_MSE_TOKENS
+        "rule text", "flavor text", "text" -> TEXT_MSE_TOKENS
+        else -> emptyList()
+    }
+
+    SheetHeaderRow(title = title, onDismiss = onDismiss)
+
+    if (tokens.isNotEmpty()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            tokens.forEach { token ->
+                AssistChip(
+                    onClick = { textValue = applyMseToken(textValue, token) },
+                    label = { Text(token.label, style = MaterialTheme.typography.labelMedium) },
+                    modifier = Modifier.testTag("mse_token_${token.label}"),
+                )
+            }
+        }
+    }
+
+    OutlinedTextField(
+        value = textValue,
+        onValueChange = { textValue = it },
+        label = { Text(title) },
+        minLines = if (isMultiline) 4 else 1,
+        maxLines = if (isMultiline) 8 else 2,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("field_editor_input"),
+    )
+
+    SheetActionButtons(
+        onDismiss = onDismiss,
+        onSave = { onSave(textValue.text) },
+    )
+}
+
+@Composable
+private fun TypeLineEditorBody(
+    initialSuperType: String,
+    initialSubType: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var superType by remember(initialSuperType) { mutableStateOf(initialSuperType) }
+    var subType by remember(initialSubType) { mutableStateOf(initialSubType) }
+
+    SheetHeaderRow(title = "Type Line", onDismiss = onDismiss)
+
+    OutlinedTextField(
+        value = superType,
+        onValueChange = { superType = it },
+        label = { Text("Card Type / Supertype") },
+        placeholder = { Text("e.g., Legendary Creature") },
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("field_editor_supertype"),
+    )
+
+    OutlinedTextField(
+        value = subType,
+        onValueChange = { subType = it },
+        label = { Text("Subtype") },
+        placeholder = { Text("e.g., Human Artificer") },
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("field_editor_subtype"),
+    )
+
+    SheetActionButtons(
+        onDismiss = onDismiss,
+        onSave = { onSave(superType.trim(), subType.trim()) },
+    )
+}
+
+@Composable
+private fun PowerToughnessEditorBody(
+    initialPower: String,
+    initialToughness: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var power by remember(initialPower) { mutableStateOf(initialPower) }
+    var toughness by remember(initialToughness) { mutableStateOf(initialToughness) }
+
+    SheetHeaderRow(title = "Power / Toughness", onDismiss = onDismiss)
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        OutlinedTextField(
+            value = power,
+            onValueChange = { power = it },
+            label = { Text("Power") },
+            placeholder = { Text("0") },
+            singleLine = true,
+            modifier = Modifier
+                .weight(1f)
+                .testTag("field_editor_power"),
+        )
+        OutlinedTextField(
+            value = toughness,
+            onValueChange = { toughness = it },
+            label = { Text("Toughness") },
+            placeholder = { Text("0") },
+            singleLine = true,
+            modifier = Modifier
+                .weight(1f)
+                .testTag("field_editor_toughness"),
+        )
+    }
+
+    SheetActionButtons(
+        onDismiss = onDismiss,
+        onSave = { onSave(power.trim(), toughness.trim()) },
+    )
+}
+
+@Composable
+private fun SheetHeaderRow(title: String, onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+        )
+        IconButton(onClick = onDismiss, modifier = Modifier.testTag("field_editor_close")) {
+            Icon(Icons.Default.Close, contentDescription = "Close editor")
+        }
+    }
+}
+
+@Composable
+private fun SheetActionButtons(
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+    ) {
+        OutlinedButton(
+            onClick = onDismiss,
+            modifier = Modifier.testTag("field_editor_cancel"),
+        ) {
+            Text(stringResource(R.string.cancel))
+        }
+        Button(
+            onClick = onSave,
+            modifier = Modifier.testTag("field_editor_save"),
+        ) {
+            Icon(Icons.Default.Check, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text(stringResource(R.string.save))
+        }
+    }
+}
+
+private fun humanFieldTitle(fieldKey: String): String = when (fieldKey.lowercase()) {
+    "name" -> "Card Name"
+    "casting cost" -> "Mana / Cost"
+    "super type" -> "Card Type"
+    "sub type" -> "Subtype"
+    "rule text" -> "Rules Text"
+    "flavor text" -> "Flavor Text"
+    "power" -> "Power"
+    "toughness" -> "Toughness"
+    "illustrator" -> "Illustrator"
+    "notes" -> "Card Notes"
+    else -> fieldKey.split(' ').joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
 }
 
 private fun applyMseToken(current: TextFieldValue, token: MseFormattingToken): TextFieldValue {
