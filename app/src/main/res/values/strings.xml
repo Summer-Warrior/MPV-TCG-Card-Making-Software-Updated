@@ -65,4 +65,29 @@
     <string name="tool_nexus_hub">Nexus Hub Sync</string>
     <string name="nexus_hub_title">Nexus Master Hub Bridge</string>
     <string name="nexus_hub_desc">Bidirectional GitHub sync, non-locked client firewall &amp; 21-digit card coder</string>
+
+    <!-- Mode Chooser & Dual Workspace (MSE vs DataEditorX) -->
+    <string name="mode_chooser_question">What are you working on today?</string>
+    <string name="mode_chooser_subtitle">Choose your offline workbench. Original Magic Set Editor &amp; DataEditorX updates are compared only when officially online.</string>
+    <string name="mode_design_title">Designing Cards</string>
+    <string name="mode_design_badge">Magic Set Editor UI</string>
+    <string name="mode_design_desc">Visual card frames, .mse-set archives, 1:1 IRL print scale, keywords, set stats, fonts &amp; Termux MSE Bridge.</string>
+    <string name="mode_design_cta">Open Card Designer</string>
+    <string name="mode_code_title">Coding Cards</string>
+    <string name="mode_code_badge">DataEditorX UI</string>
+    <string name="mode_code_desc">Offline card database table, 21-digit BigInteger registers, 20-Color Pie coding, Lua/SVar scripts &amp; Nexus Hub packs.</string>
+    <string name="mode_code_cta">Open Card Coder</string>
+    <string name="dex_workbench_title">DataEditorX Coder</string>
+    <string name="dex_tab_database">Card DB</string>
+    <string name="dex_tab_inspector">Inspector</string>
+    <string name="dex_tab_script">Lua / Export</string>
+    <string name="switch_to_coder">Code Cards</string>
+    <string name="switch_to_designer">Design Cards</string>
+    <string name="switch_mode_chooser">Switch Mode</string>
+    <string name="theme_dark_label">Dark Theme</string>
+    <string name="theme_light_label">Light Theme</string>
+    <string name="connectivity_online">Online</string>
+    <string name="connectivity_offline">Offline Mode</string>
+    <string name="upstream_offline_gate_banner">Offline Mode — Original Magic Set Editor &amp; DataEditorX update comparisons are paused until officially online. Both offline UIs remain 100% functional.</string>
+    <string name="upstream_online_ready_banner">Officially Online — Ready to compare original Magic Set Editor &amp; DataEditorX upstream repositories via ETag/Atom.</string>
 </resources>

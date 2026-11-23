@@ -72,6 +72,75 @@ private val StudioLightColorScheme = lightColorScheme(
     outlineVariant = LightSurfaceHighest,
 )
 
+enum class WorkspaceVisualTheme {
+    MSE_DESIGNER,
+    DATA_EDITOR_X_CODER,
+}
+
+private val DataEditorXDarkColorScheme = darkColorScheme(
+    primary = DexCyan,
+    onPrimary = OnDexCyan,
+    primaryContainer = DexCyanContainer,
+    onPrimaryContainer = OnDexCyanContainer,
+    secondary = DexSteelSecondary,
+    onSecondary = OnDexSteel,
+    secondaryContainer = DexSteelContainer,
+    onSecondaryContainer = OnDexSteelContainer,
+    tertiary = StatusConnected,
+    onTertiary = OnStatusConnected,
+    tertiaryContainer = StatusConnectedContainer,
+    onTertiaryContainer = OnStatusConnectedContainer,
+    error = StudioError,
+    onError = OnStudioError,
+    errorContainer = StudioErrorContainer,
+    onErrorContainer = OnStudioErrorContainer,
+    background = DexDarkBg,
+    onBackground = DexTextPrimary,
+    surface = DexDarkSurface,
+    onSurface = DexTextPrimary,
+    surfaceVariant = DexDarkSurfaceHigh,
+    onSurfaceVariant = DexTextMuted,
+    surfaceContainerLowest = DexDarkCodeBg,
+    surfaceContainerLow = DexDarkSurface,
+    surfaceContainer = DexDarkSurfaceHigh,
+    surfaceContainerHigh = DexDarkSurfaceHighest,
+    surfaceContainerHighest = DexDarkSurfaceHighest,
+    outline = DexDarkOutline,
+    outlineVariant = DexDarkOutlineSubtle,
+)
+
+private val DataEditorXLightColorScheme = lightColorScheme(
+    primary = DexLightCyan,
+    onPrimary = OnDexLightCyan,
+    primaryContainer = DexLightCyanContainer,
+    onPrimaryContainer = OnDexLightCyanContainer,
+    secondary = DexLightSteel,
+    onSecondary = OnDexLightSteel,
+    secondaryContainer = DexLightSteelContainer,
+    onSecondaryContainer = OnDexLightSteelContainer,
+    tertiary = LightConnected,
+    onTertiary = OnDexLightCyan,
+    tertiaryContainer = LightConnectedContainer,
+    onTertiaryContainer = OnStatusConnected,
+    error = LightError,
+    onError = OnDexLightCyan,
+    errorContainer = LightErrorContainer,
+    onErrorContainer = OnStudioError,
+    background = DexLightBg,
+    onBackground = LightTextPrimary,
+    surface = DexLightSurface,
+    onSurface = LightTextPrimary,
+    surfaceVariant = DexLightSurfaceHigh,
+    onSurfaceVariant = LightTextMuted,
+    surfaceContainerLowest = DexLightSurface,
+    surfaceContainerLow = DexLightBg,
+    surfaceContainer = DexLightSurfaceHigh,
+    surfaceContainerHigh = DexLightSurfaceHighest,
+    surfaceContainerHighest = DexLightSurfaceHighest,
+    outline = DexLightOutline,
+    outlineVariant = DexLightSurfaceHighest,
+)
+
 val StudioShapes = Shapes(
     extraSmall = RoundedCornerShape(6.dp),
     small = RoundedCornerShape(10.dp),
@@ -83,9 +152,13 @@ val StudioShapes = Shapes(
 @Composable
 fun TcgStudioTheme(
     darkTheme: Boolean = true,
+    workspaceTheme: WorkspaceVisualTheme = WorkspaceVisualTheme.MSE_DESIGNER,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (darkTheme) StudioDarkColorScheme else StudioLightColorScheme
+    val colorScheme = when (workspaceTheme) {
+        WorkspaceVisualTheme.MSE_DESIGNER -> if (darkTheme) StudioDarkColorScheme else StudioLightColorScheme
+        WorkspaceVisualTheme.DATA_EDITOR_X_CODER -> if (darkTheme) DataEditorXDarkColorScheme else DataEditorXLightColorScheme
+    }
     MaterialTheme(
         colorScheme = colorScheme,
         typography = StudioTypography,

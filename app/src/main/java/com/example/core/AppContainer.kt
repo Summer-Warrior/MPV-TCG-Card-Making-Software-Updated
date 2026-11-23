@@ -37,6 +37,8 @@ class AppContainer(context: Context) {
 
     val settingsRepository = SettingsRepository(appContext)
 
+    val networkConnectivityMonitor = NetworkConnectivityMonitor(appContext)
+
     val mseBridgeClient = MseBridgeClient(
         okHttpClient = okHttpClient,
         moshi = moshi,

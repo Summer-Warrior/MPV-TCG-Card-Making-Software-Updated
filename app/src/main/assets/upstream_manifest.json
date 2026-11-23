@@ -35,6 +35,23 @@
       "last_etag": null,
       "last_checked_at": null,
       "description": "Upstream legacy MSE2 fallback engine for older Non-Magic and Outdated-Templates packs."
+    },
+    {
+      "id": "dataeditorx_official",
+      "name": "DataEditorX (Original Upstream)",
+      "owner": "247321453",
+      "repo": "DataEditorX",
+      "branch": "master",
+      "available_branches": ["master", "main"],
+      "channel": "stable",
+      "engine_target": "dataeditorx",
+      "font_folder": null,
+      "enabled": true,
+      "pinned_sha": null,
+      "previous_sha": null,
+      "last_etag": null,
+      "last_checked_at": null,
+      "description": "Original DataEditorX card database & Lua scripting IDE upstream (compared only when officially online)."
     }
   ],
   "pack_splits": [

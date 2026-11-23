@@ -38,6 +38,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
+import com.example.ui.coder.DataEditorXWorkbenchScreen
 import com.example.ui.diagnostics.BridgeDiagnosticsScreen
 import com.example.ui.diagnostics.BridgeDiagnosticsSheet
 import com.example.ui.fonts.FontsScreen
@@ -48,6 +49,7 @@ import com.example.ui.nexus.NexusHubSyncScreen
 import com.example.ui.nexus.NexusHubViewModel
 import com.example.ui.theme.TcgStudioTheme
 import com.example.ui.upstream.UpstreamScreen
+import com.example.ui.welcome.ModeChooserScreen
 import com.example.ui.welcome.WelcomeScreen
 import com.example.ui.workspace.SetWorkspaceScreen
 import kotlinx.coroutines.launch
@@ -59,8 +61,10 @@ data class HubDeepLinkRequest(
 )
 
 object StudioRoutes {
+    const val MODE_CHOOSER = "studio_mode_chooser"
     const val WELCOME = "mse_welcome"
     const val WORKSPACE = "mse_workspace"
+    const val CODING_WORKBENCH = "dataeditorx_coder"
     const val FONTS = "mse_fonts"
     const val UPSTREAM = "mse_upstream"
     const val BRIDGE = "mse_bridge"
@@ -68,8 +72,9 @@ object StudioRoutes {
 }
 
 /**
- * Root Compose Navigation Shell — Authentic Magic Set Editor workflow.
- * Launches directly into the MSE Welcome Window.
+ * Root Compose Navigation Shell — Offline-First Dual Workbench:
+ * Asks on launch whether the user is Designing Cards (Magic Set Editor UI)
+ * or Coding Cards (DataEditorX UI), with online-only upstream comparison gating.
  */
 @Composable
 fun TcgStudioApp(
@@ -97,6 +102,7 @@ fun TcgStudioApp(
     val catalogSyncState by viewModel.catalogSyncState.collectAsStateWithLifecycle()
     val fonts by viewModel.fonts.collectAsStateWithLifecycle()
     val manifest by viewModel.manifest.collectAsStateWithLifecycle()
+    val isDeviceOnline by viewModel.isDeviceOnline.collectAsStateWithLifecycle()
     val commitChecks by viewModel.commitChecks.collectAsStateWithLifecycle()
     val isCheckingUpdates by viewModel.isCheckingUpdates.collectAsStateWithLifecycle()
     val isSyncingBridge by viewModel.isSyncingBridge.collectAsStateWithLifecycle()
@@ -150,16 +156,18 @@ fun TcgStudioApp(
     val lifecycleOwner = LocalLifecycleOwner.current
     var hasCompletedFirstResume by remember { mutableStateOf(false) }
 
-    // Re-run lightweight ETag-cached cross-repo checks whenever the user reopens the installed app
-    DisposableEffect(lifecycleOwner) {
+    // Re-run lightweight ETag-cached cross-repo checks whenever the user reopens the installed app while online
+    DisposableEffect(lifecycleOwner, isDeviceOnline) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 if (!hasCompletedFirstResume) {
                     hasCompletedFirstResume = true
                 } else {
                     engineSyncViewModel.refreshCompanionAppStatus()
-                    engineSyncViewModel.syncLiveGameEngine(fineGrainedPat = null, isManualRefresh = false)
-                    nexusHubViewModel.verifyMutualLinkAndCheckHub(silent = true)
+                    if (isDeviceOnline) {
+                        engineSyncViewModel.syncLiveGameEngine(fineGrainedPat = null, isManualRefresh = false)
+                        nexusHubViewModel.verifyMutualLinkAndCheckHub(silent = true)
+                    }
                 }
             }
         }
@@ -224,18 +232,62 @@ fun TcgStudioApp(
         ) { innerPadding ->
             NavHost(
                 navController = navController,
-                startDestination = StudioRoutes.WELCOME,
+                startDestination = StudioRoutes.MODE_CHOOSER,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
             ) {
+                composable(StudioRoutes.MODE_CHOOSER) {
+                    ModeChooserScreen(
+                        darkTheme = settings.darkTheme,
+                        isDeviceOnline = isDeviceOnline,
+                        bridgeHealth = bridgeHealth,
+                        recentSetsCount = recentSets.size,
+                        hasActiveSet = archive != null,
+                        activeSetTitle = archive?.document?.setTitle,
+                        stagedCodedCardsCount = nexusHubState.savedCodedCards.size,
+                        activeCoderClientName = nexusHubState.selectedClient?.name ?: "Ultimate TCG (WIP)",
+                        nexusLinkStatus = nexusHubState.linkStatus,
+                        onToggleDarkTheme = viewModel::toggleDarkTheme,
+                        onSelectDesignCards = {
+                            navController.navigate(StudioRoutes.WELCOME) {
+                                launchSingleTop = true
+                            }
+                        },
+                        onResumeActiveSet = { openWorkspace() },
+                        onSelectCodeCards = {
+                            navController.navigate(StudioRoutes.CODING_WORKBENCH) {
+                                launchSingleTop = true
+                            }
+                        },
+                        onOpenUpstreamManager = { navController.navigate(StudioRoutes.UPSTREAM) },
+                        onOpenBridgeSheet = { showBridgeSheet = true },
+                        onOpenBridgeSetup = { navController.navigate(StudioRoutes.BRIDGE) },
+                        onOpenNexusHub = { navController.navigate(StudioRoutes.NEXUS_HUB) },
+                    )
+                }
+
                 composable(StudioRoutes.WELCOME) {
                     WelcomeScreen(
+                        darkTheme = settings.darkTheme,
+                        isDeviceOnline = isDeviceOnline,
                         bridgeHealth = bridgeHealth,
                         discoveredGames = discoveredGames,
                         discoveredStyles = discoveredStyles,
                         catalogSyncState = catalogSyncState,
                         recentSets = recentSets,
+                        onToggleDarkTheme = viewModel::toggleDarkTheme,
+                        onBackToModeChooser = {
+                            navController.navigate(StudioRoutes.MODE_CHOOSER) {
+                                popUpTo(StudioRoutes.MODE_CHOOSER) { inclusive = false }
+                                launchSingleTop = true
+                            }
+                        },
+                        onSwitchToCardCoder = {
+                            navController.navigate(StudioRoutes.CODING_WORKBENCH) {
+                                launchSingleTop = true
+                            }
+                        },
                         onRefreshCatalog = viewModel::refreshTemplateCatalog,
                         onToggleOptInPack = viewModel::toggleOptInPackChannel,
                         onOpenBridgeSheet = { showBridgeSheet = true },
@@ -308,6 +360,12 @@ fun TcgStudioApp(
                             onOpenUpstreamSplits = { navController.navigate(StudioRoutes.UPSTREAM) },
                             onOpenBridgeSettings = { navController.navigate(StudioRoutes.BRIDGE) },
                             onOpenNexusHub = { navController.navigate(StudioRoutes.NEXUS_HUB) },
+                            onSwitchToCardCoder = {
+                                navController.navigate(StudioRoutes.CODING_WORKBENCH) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onToggleDarkTheme = viewModel::toggleDarkTheme,
                             onSelectCard = viewModel::selectCard,
                             onAddBlankCard = viewModel::addBlankCard,
                             onDuplicateCard = viewModel::duplicateCard,
@@ -330,6 +388,37 @@ fun TcgStudioApp(
                     }
                 }
 
+                composable(StudioRoutes.CODING_WORKBENCH) {
+                    val activeCard = archive?.document?.cards?.getOrNull(activeCardIndex)
+                    DataEditorXWorkbenchScreen(
+                        darkTheme = settings.darkTheme,
+                        isDeviceOnline = isDeviceOnline,
+                        uiState = nexusHubState,
+                        viewModel = nexusHubViewModel,
+                        activeMseCardName = activeCard?.name,
+                        activeMseCardType = activeCard?.fullTypeLine,
+                        activeMseCardRules = activeCard?.ruleText,
+                        onToggleDarkTheme = viewModel::toggleDarkTheme,
+                        onBackToModeChooser = {
+                            navController.navigate(StudioRoutes.MODE_CHOOSER) {
+                                popUpTo(StudioRoutes.MODE_CHOOSER) { inclusive = false }
+                                launchSingleTop = true
+                            }
+                        },
+                        onSwitchToDesigner = {
+                            val target = if (archive != null) StudioRoutes.WORKSPACE else StudioRoutes.WELCOME
+                            navController.navigate(target) {
+                                launchSingleTop = true
+                            }
+                        },
+                        onOpenUpstreamCompare = { navController.navigate(StudioRoutes.UPSTREAM) },
+                        onOpenNexusHubSync = { navController.navigate(StudioRoutes.NEXUS_HUB) },
+                        onNotify = { msg ->
+                            uiScope.launch { snackbarHostState.showSnackbar(msg) }
+                        },
+                    )
+                }
+
                 composable(StudioRoutes.FONTS) {
                     ToolScreenScaffold(
                         title = "Fonts & Licenses",
@@ -349,11 +438,12 @@ fun TcgStudioApp(
 
                 composable(StudioRoutes.UPSTREAM) {
                     ToolScreenScaffold(
-                        title = "Upstream Splits & Updates",
+                        title = "MSE & DataEditorX Updates",
                         onBack = { navController.popBackStack() },
                     ) {
                         UpstreamScreen(
                             manifest = manifest,
+                            isDeviceOnline = isDeviceOnline,
                             commitChecks = commitChecks,
                             isCheckingUpdates = isCheckingUpdates,
                             isSyncingBridge = isSyncingBridge,

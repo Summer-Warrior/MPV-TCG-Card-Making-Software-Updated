@@ -27,7 +27,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SaveAs
@@ -130,6 +133,8 @@ fun SetWorkspaceScreen(
     onOpenUpstreamSplits: () -> Unit,
     onOpenBridgeSettings: () -> Unit,
     onOpenNexusHub: () -> Unit = {},
+    onSwitchToCardCoder: () -> Unit = {},
+    onToggleDarkTheme: (Boolean) -> Unit = {},
     onSelectCard: (Int) -> Unit,
     onAddBlankCard: () -> Unit,
     onDuplicateCard: (Int) -> Unit,
@@ -368,7 +373,29 @@ fun SetWorkspaceScreen(
                         )
                         HorizontalDivider()
                         DropdownMenuItem(
-                            text = { Text("Upstream Splits") },
+                            text = { Text("Switch to Card Coder (DataEditorX)") },
+                            leadingIcon = { Icon(Icons.Default.Code, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                onSwitchToCardCoder()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (settings.darkTheme) "Switch to Light Theme" else "Switch to Dark Theme") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (settings.darkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                                    contentDescription = null,
+                                )
+                            },
+                            onClick = {
+                                showOverflowMenu = false
+                                onToggleDarkTheme(!settings.darkTheme)
+                            },
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("Upstream Splits (MSE & DataEditorX)") },
                             leadingIcon = { Icon(Icons.Default.CloudSync, contentDescription = null) },
                             onClick = {
                                 showOverflowMenu = false
@@ -384,7 +411,7 @@ fun SetWorkspaceScreen(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Nexus Hub Sync & Coder") },
+                            text = { Text("Nexus Hub & Engine Sync") },
                             leadingIcon = { Icon(Icons.Default.Hub, contentDescription = null) },
                             onClick = {
                                 showOverflowMenu = false

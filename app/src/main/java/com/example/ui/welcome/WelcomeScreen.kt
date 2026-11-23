@@ -22,13 +22,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.AutoAwesomeMosaic
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FontDownload
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.Terminal
@@ -72,11 +76,16 @@ import com.example.ui.components.BridgeStatusPill
  */
 @Composable
 fun WelcomeScreen(
+    darkTheme: Boolean,
+    isDeviceOnline: Boolean,
     bridgeHealth: BridgeHealthState,
     discoveredGames: List<DiscoveredGame>,
     discoveredStyles: List<DiscoveredStyle>,
     catalogSyncState: CatalogSyncState,
     recentSets: List<RecentSetRecord>,
+    onToggleDarkTheme: (Boolean) -> Unit,
+    onBackToModeChooser: () -> Unit,
+    onSwitchToCardCoder: () -> Unit,
     onRefreshCatalog: () -> Unit,
     onToggleOptInPack: (CatalogPackFilter, Boolean) -> Unit,
     onOpenBridgeSheet: () -> Unit,
@@ -115,13 +124,25 @@ fun WelcomeScreen(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.weight(1f),
                     ) {
+                        IconButton(
+                            onClick = onBackToModeChooser,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("welcome_back_to_chooser"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back to Mode Chooser",
+                            )
+                        }
+
                         // Clean MSE Studio Emblem
                         Box(
                             modifier = Modifier
-                                .size(42.dp)
+                                .size(38.dp)
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(
                                     Brush.linearGradient(
@@ -143,7 +164,7 @@ fun WelcomeScreen(
                                     imageVector = Icons.Default.AutoAwesomeMosaic,
                                     contentDescription = "Magic Set Editor Emblem",
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(9.dp),
+                                    modifier = Modifier.padding(8.dp),
                                 )
                             }
                         }
@@ -151,13 +172,13 @@ fun WelcomeScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = stringResource(R.string.welcome_title),
-                                style = MaterialTheme.typography.titleLarge,
+                                style = MaterialTheme.typography.titleMedium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                text = stringResource(R.string.welcome_subtitle),
-                                style = MaterialTheme.typography.bodySmall,
+                                text = "Card Designer • ${if (isDeviceOnline) "Online" else "Offline Mode"}",
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -165,11 +186,28 @@ fun WelcomeScreen(
                         }
                     }
 
-                    Spacer(Modifier.width(8.dp))
-                    BridgeStatusPill(
-                        healthState = bridgeHealth,
-                        onClick = onOpenBridgeSheet,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        IconButton(
+                            onClick = { onToggleDarkTheme(!darkTheme) },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("welcome_theme_toggle"),
+                        ) {
+                            Icon(
+                                imageVector = if (darkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                                contentDescription = "Toggle Dark Theme",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(19.dp),
+                            )
+                        }
+                        BridgeStatusPill(
+                            healthState = bridgeHealth,
+                            onClick = onOpenBridgeSheet,
+                        )
+                    }
                 }
 
                 // ---- Live Catalog Sync Status Pill ----
@@ -309,12 +347,24 @@ fun WelcomeScreen(
             }
         }
 
+        // ---- Separate Workbench Switcher: Jump to DataEditorX Coding UI ----
+        item {
+            WelcomeActionCard(
+                icon = Icons.Default.Code,
+                title = "Switch to Coding Cards (DataEditorX UI)",
+                subtitle = "Open the dedicated offline DataEditorX card database, 21-digit registers & Lua workbench",
+                emphasized = false,
+                onClick = onSwitchToCardCoder,
+                modifier = Modifier.testTag("welcome_switch_to_coder"),
+            )
+        }
+
         // ---- Nexus Master Hub Bidirectional Sync Card ----
         item {
             WelcomeActionCard(
                 icon = Icons.Default.Hub,
                 title = stringResource(R.string.nexus_hub_title),
-                subtitle = "${nexusLinkStatus.displayLabel} • ${stringResource(R.string.nexus_hub_desc)}",
+                subtitle = "${nexusLinkStatus.displayLabel} • Bidirectional GitHub Hub & Engine Sync",
                 emphasized = false,
                 onClick = onOpenNexusHub,
                 modifier = Modifier.testTag("welcome_tool_nexus_hub"),

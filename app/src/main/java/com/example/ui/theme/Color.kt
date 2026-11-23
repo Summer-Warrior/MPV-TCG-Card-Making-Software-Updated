@@ -61,3 +61,43 @@ val LightErrorContainer = Color(0xFFFFDAD9)
 
 val LightTextPrimary = Color(0xFF181C22)
 val LightTextMuted = Color(0xFF5A6270)
+
+// DataEditorX Dark IDE & Card Database Palette (Card Coding Workbench)
+val DexDarkBg = Color(0xFF0A0F15)
+val DexDarkSurface = Color(0xFF111822)
+val DexDarkSurfaceHigh = Color(0xFF182230)
+val DexDarkSurfaceHighest = Color(0xFF212E40)
+val DexDarkCodeBg = Color(0xFF070B10)
+val DexDarkOutline = Color(0xFF2E3F54)
+val DexDarkOutlineSubtle = Color(0xFF1E2B3B)
+
+val DexCyan = Color(0xFF4CC9F0)
+val DexCyanContainer = Color(0xFF113040)
+val OnDexCyan = Color(0xFF031B26)
+val OnDexCyanContainer = Color(0xFFCAEEFF)
+
+val DexSteelSecondary = Color(0xFF7AA2F7)
+val DexSteelContainer = Color(0xFF192844)
+val OnDexSteel = Color(0xFF061530)
+val OnDexSteelContainer = Color(0xFFD5E3FF)
+
+val DexTextPrimary = Color(0xFFE6EDF5)
+val DexTextMuted = Color(0xFF8DA0B8)
+
+// DataEditorX Light IDE Palette (Optional Light Mode for Coding Workbench)
+val DexLightBg = Color(0xFFF2F5F9)
+val DexLightSurface = Color(0xFFFFFFFF)
+val DexLightSurfaceHigh = Color(0xFFE6ECF4)
+val DexLightSurfaceHighest = Color(0xFFD8E1EC)
+val DexLightOutline = Color(0xFFB5C4D6)
+
+val DexLightCyan = Color(0xFF0E6A8A)
+val DexLightCyanContainer = Color(0xFFCDEEFF)
+val OnDexLightCyan = Color(0xFFFFFFFF)
+val OnDexLightCyanContainer = Color(0xFF02202E)
+
+val DexLightSteel = Color(0xFF33558C)
+val DexLightSteelContainer = Color(0xFFD8E5FF)
+val OnDexLightSteel = Color(0xFFFFFFFF)
+val OnDexLightSteelContainer = Color(0xFF091D3D)
+

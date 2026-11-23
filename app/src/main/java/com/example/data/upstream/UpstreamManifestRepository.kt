@@ -30,19 +30,35 @@ class UpstreamManifestRepository(
     val manifest: StateFlow<UpstreamManifest> = _manifest.asStateFlow()
 
     private fun loadOrSeedManifest(): UpstreamManifest {
+        val seeded = loadSeededManifestFromAssets()
         if (manifestFile.exists() && manifestFile.length() > 0L) {
             runCatching {
                 val parsed = adapter.fromJson(manifestFile.readText())
                 if (parsed != null && parsed.engineSplits.isNotEmpty()) {
+                    val existingEngineIds = parsed.engineSplits.map { it.id }.toSet()
+                    val existingPackIds = parsed.packSplits.map { it.id }.toSet()
+                    val missingEngines = seeded.engineSplits.filter { it.id !in existingEngineIds }
+                    val missingPacks = seeded.packSplits.filter { it.id !in existingPackIds }
+                    if (missingEngines.isNotEmpty() || missingPacks.isNotEmpty()) {
+                        val merged = parsed.copy(
+                            engineSplits = parsed.engineSplits + missingEngines,
+                            packSplits = parsed.packSplits + missingPacks,
+                        )
+                        runCatching { manifestFile.writeText(adapter.toJson(merged)) }
+                        return merged
+                    }
                     return parsed
                 }
             }
         }
-        val seededJson = context.assets.open("upstream_manifest.json").bufferedReader().use { it.readText() }
-        val seeded = adapter.fromJson(seededJson) ?: UpstreamManifest()
         runCatching { manifestFile.writeText(adapter.toJson(seeded)) }
         return seeded
     }
+
+    private fun loadSeededManifestFromAssets(): UpstreamManifest = runCatching {
+        val seededJson = context.assets.open("upstream_manifest.json").bufferedReader().use { it.readText() }
+        adapter.fromJson(seededJson) ?: UpstreamManifest()
+    }.getOrDefault(UpstreamManifest())
 
     private fun saveManifestSync(updated: UpstreamManifest) {
         manifestFile.writeText(adapter.toJson(updated))

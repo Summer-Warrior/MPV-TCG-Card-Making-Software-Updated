@@ -408,6 +408,75 @@ class NexusHubViewModel(
         }
     }
 
+    fun loadStagedCardForEditing(card: NexusCodedCard) {
+        val parsedMode = if (card.editorMode.equals(CardEditorMode.AVATAR_PROFILE_MEMORIAL_DOSSIER.wireValue, ignoreCase = true)) {
+            CardEditorMode.AVATAR_PROFILE_MEMORIAL_DOSSIER
+        } else {
+            CardEditorMode.MATCH_GAMEPLAY
+        }
+        _uiState.update { state ->
+            val targetClientValid = state.appliedIndex.clients.any { it.id == card.targetClientId && !it.upstreamSourceLock }
+            state.copy(
+                selectedClientId = if (targetClientValid) card.targetClientId else state.selectedClientId,
+                editorMode = parsedMode,
+                cardId = card.cardId,
+                register21Digit = card.register21Digit.orEmpty(),
+                cardName = card.cardName,
+                cardType = card.cardType,
+                rulesText = card.rulesText,
+                selectedColorPiePips = card.colorPiePips,
+                selectedFlavorFilters = card.flavorFilters.toSet(),
+                selectedTemporalEffects = card.temporalEffects.toSet(),
+                codingVariables = card.codingVariables,
+                ultimateTcgManual = card.ultimateTcgManual,
+            )
+        }
+        recomputeValidation()
+        _messages.tryEmit("Loaded '${card.cardName.ifBlank { card.cardId }}' into DataEditorX Inspector.")
+    }
+
+    fun startNewBlankCodedCard() {
+        _uiState.update { state ->
+            state.copy(
+                cardId = "",
+                register21Digit = "",
+                cardName = "",
+                cardType = "",
+                rulesText = "",
+                selectedColorPiePips = emptyList(), // Strictly ZERO default colors selected
+                selectedFlavorFilters = emptySet(),
+                selectedTemporalEffects = emptySet(),
+                codingVariables = emptyMap(),
+                ultimateTcgManual = UltimateTcgManualFields(),
+            )
+        }
+        recomputeValidation()
+        _messages.tryEmit("Started new blank card record in DataEditorX.")
+    }
+
+    fun duplicateStagedCard(card: NexusCodedCard) {
+        viewModelScope.launch {
+            val nextRegister = card.register21Digit?.takeIf { CardCodeValidator.NUMERIC_21_DIGIT_REGEX.matches(it) }
+                ?.let { CardCodeValidator.computeBigIntRegisterOffset(it, BigInteger.ONE) }
+            val nextId = if (CardCodeValidator.NUMERIC_21_DIGIT_REGEX.matches(card.cardId) && nextRegister != null) {
+                nextRegister
+            } else {
+                UUID.randomUUID().toString()
+            }
+            val clone = card.copy(
+                cardId = nextId,
+                register21Digit = nextRegister ?: card.register21Digit,
+                cardName = "${card.cardName} (Copy)",
+                image = null,
+            )
+            val nextList = _uiState.value.savedCodedCards + clone
+            repository.saveCodedCards(nextList)
+            _uiState.update { it.copy(savedCodedCards = nextList) }
+            loadStagedCardForEditing(clone)
+            _messages.tryEmit("Duplicated '${card.cardName}' as '${clone.cardName}'.")
+        }
+    }
+
     fun buildCurrentExportPackJson(): String? {
         val state = _uiState.value
         val client = state.selectedClient ?: return null

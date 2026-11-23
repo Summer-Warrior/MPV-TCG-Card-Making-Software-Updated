@@ -103,6 +103,8 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
 
     val manifest: StateFlow<UpstreamManifest> = container.upstreamManifestRepository.manifest
 
+    val isDeviceOnline: StateFlow<Boolean> = container.networkConnectivityMonitor.isOnline
+
     private val _bridgeHealth = MutableStateFlow<BridgeHealthState>(BridgeHealthState.Checking)
     val bridgeHealth: StateFlow<BridgeHealthState> = _bridgeHealth.asStateFlow()
 
@@ -164,7 +166,9 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
             }
         }
         viewModelScope.launch {
-            container.mseTemplateCatalogRepository.syncCatalog(forceRefresh = false)
+            if (container.networkConnectivityMonitor.checkIsOnlineNow()) {
+                container.mseTemplateCatalogRepository.syncCatalog(forceRefresh = false)
+            }
         }
         checkBridgeHealth(autoRenderIfOnline = false)
     }
@@ -172,6 +176,10 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     // ---- Dynamic Template Catalog & Real Upstream Offline Base-Frame Resolution ----
 
     fun refreshTemplateCatalog() {
+        if (!container.networkConnectivityMonitor.checkIsOnlineNow()) {
+            _messages.tryEmit("Offline mode — connect to the internet to sync upstream Magic Set Editor template packs.")
+            return
+        }
         viewModelScope.launch {
             container.mseTemplateCatalogRepository.syncCatalog(forceRefresh = true)
             val state = catalogSyncState.value
@@ -788,6 +796,12 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     // ---- Upstream Splits & GitHub ETag/Atom Watcher ----
 
     fun checkAllGitHubUpdates() {
+        if (!container.networkConnectivityMonitor.checkIsOnlineNow()) {
+            _messages.tryEmit(
+                "Offline mode — original Magic Set Editor & DataEditorX update comparisons only run when officially online."
+            )
+            return
+        }
         viewModelScope.launch {
             _isCheckingUpdates.value = true
             val current = manifest.value

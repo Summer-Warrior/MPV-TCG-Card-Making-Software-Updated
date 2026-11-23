@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -56,15 +58,21 @@ import com.example.data.upstream.UpdateCheckState
 import com.example.data.upstream.UpstreamManifest
 import com.example.data.upstream.UpstreamRepoSplit
 import com.example.ui.theme.JetBrainsMonoFamily
+import com.example.ui.theme.StatusConnected
+import com.example.ui.theme.StatusConnectedContainer
+import com.example.ui.theme.StatusOfflineAmber
+import com.example.ui.theme.StatusOfflineAmberContainer
 
 /**
  * Upstream Splits & Manifest Manager Screen (Section 3 & Phase 1.6).
- * Reads/edits `upstream_manifest.json`, checks GitHub public ETag/Atom updates,
+ * Reads/edits `upstream_manifest.json`, compares original Magic Set Editor & DataEditorX
+ * upstream repositories ONLY when officially online via GitHub public ETag/Atom updates,
  * supports SHA pinning + 1-tap rollback, Open-Resource Game Connectors, and bridge delta sync.
  */
 @Composable
 fun UpstreamScreen(
     manifest: UpstreamManifest,
+    isDeviceOnline: Boolean,
     commitChecks: Map<String, GitHubCommitCheckResult>,
     isCheckingUpdates: Boolean,
     isSyncingBridge: Boolean,
@@ -95,13 +103,56 @@ fun UpstreamScreen(
     ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Online-Only Gate Banner for Original Magic Set Editor & DataEditorX comparisons
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = if (isDeviceOnline) {
+                        StatusConnectedContainer.copy(alpha = 0.65f)
+                    } else {
+                        StatusOfflineAmberContainer.copy(alpha = 0.7f)
+                    },
+                    border = BorderStroke(
+                        1.dp,
+                        if (isDeviceOnline) StatusConnected.copy(alpha = 0.5f)
+                        else StatusOfflineAmber.copy(alpha = 0.6f),
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("upstream_connectivity_banner"),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (isDeviceOnline) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                            contentDescription = null,
+                            tint = if (isDeviceOnline) StatusConnected else StatusOfflineAmber,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Text(
+                            text = if (isDeviceOnline) {
+                                stringResource(R.string.upstream_online_ready_banner)
+                            } else {
+                                stringResource(R.string.upstream_offline_gate_banner)
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Read-only upstream splits & local template overrides",
+                        text = "Original Magic Set Editor & DataEditorX upstream splits (online-only comparison)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -120,7 +171,7 @@ fun UpstreamScreen(
                 ) {
                     Button(
                         onClick = onCheckGitHubUpdates,
-                        enabled = !isCheckingUpdates,
+                        enabled = isDeviceOnline && !isCheckingUpdates,
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         modifier = Modifier
                             .weight(1f)
@@ -133,13 +184,17 @@ fun UpstreamScreen(
                             )
                         } else {
                             Icon(
-                                Icons.Default.Refresh,
+                                imageVector = if (isDeviceOnline) Icons.Default.Refresh else Icons.Default.CloudOff,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
                             )
                         }
                         Spacer(Modifier.width(6.dp))
-                        Text("Check GitHub", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            text = if (isDeviceOnline) "Compare Online" else "Offline (Paused)",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
 
                     OutlinedButton(
