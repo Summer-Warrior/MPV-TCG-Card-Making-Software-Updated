@@ -13,12 +13,17 @@ import com.example.data.bridge.BridgeTemplateDto
 import com.example.data.bridge.TemplateValidateRequest
 import com.example.data.bridge.TemplateValidateResponse
 import com.example.data.fonts.FontEntry
+import com.example.data.mse.CatalogPackFilter
+import com.example.data.mse.CatalogSyncState
+import com.example.data.mse.DiscoveredGame
+import com.example.data.mse.DiscoveredStyle
+import com.example.data.mse.FrameVariantOption
 import com.example.data.mse.MseHitbox
 import com.example.data.mse.MseSetArchive
 import com.example.data.mse.MseSetInfo
-import com.example.data.mse.MseStyleOption
 import com.example.data.mse.MseStyleSpec
 import com.example.data.mse.RecentSetRecord
+import com.example.data.mse.ResolvedOfflineFrame
 import com.example.data.settings.EngineSplit
 import com.example.data.settings.PhysicalCardProfile
 import com.example.data.settings.StudioSettings
@@ -37,6 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 sealed class BridgeHealthState {
     data object Checking : BridgeHealthState()
@@ -85,6 +91,12 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     val styleSpec: StateFlow<MseStyleSpec> = container.mseWorkspaceRepository.styleSpec
     val recentSets: StateFlow<List<RecentSetRecord>> = container.mseWorkspaceRepository.recentSets
     val hasUnsavedChanges: StateFlow<Boolean> = container.mseWorkspaceRepository.hasUnsavedChanges
+    val canUndo: StateFlow<Boolean> = container.mseWorkspaceRepository.canUndo
+    val canRedo: StateFlow<Boolean> = container.mseWorkspaceRepository.canRedo
+
+    val discoveredGames: StateFlow<List<DiscoveredGame>> = container.mseTemplateCatalogRepository.games
+    val discoveredStyles: StateFlow<List<DiscoveredStyle>> = container.mseTemplateCatalogRepository.styles
+    val catalogSyncState: StateFlow<CatalogSyncState> = container.mseTemplateCatalogRepository.syncState
 
     val fonts: StateFlow<List<FontEntry>> = container.fontCatalogRepository.unifiedFontsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -96,6 +108,9 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _renderState = MutableStateFlow<CardRenderState>(CardRenderState.Idle)
     val renderState: StateFlow<CardRenderState> = _renderState.asStateFlow()
+
+    private val _offlineFrame = MutableStateFlow<ResolvedOfflineFrame?>(null)
+    val offlineFrame: StateFlow<ResolvedOfflineFrame?> = _offlineFrame.asStateFlow()
 
     private val _bridgeTemplates = MutableStateFlow<List<BridgeTemplateDto>>(emptyList())
     val bridgeTemplates: StateFlow<List<BridgeTemplateDto>> = _bridgeTemplates.asStateFlow()
@@ -127,7 +142,133 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                 container.fontCatalogRepository.updateStyleReferencedFonts(spec.referencedFonts)
             }
         }
+        viewModelScope.launch {
+            container.mseTemplateCatalogRepository.packFonts.collect { packFonts ->
+                container.fontCatalogRepository.updateDiscoveredPackFonts(packFonts)
+            }
+        }
+        // Re-resolve active style spec & offline frame once dynamic catalog finishes indexing
+        viewModelScope.launch {
+            discoveredStyles.collect {
+                val active = archive.value ?: return@collect
+                val matched = container.mseTemplateCatalogRepository.findStyle(
+                    gameId = active.document.game,
+                    stylesheetId = active.document.stylesheet,
+                )
+                if (matched != null) {
+                    val currentKey = "${matched.packRepo}:${matched.folderName}"
+                    if (_offlineFrame.value?.styleKey != currentKey) {
+                        resolveOfflineBaseFrameForStyle(matched)
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            container.mseTemplateCatalogRepository.syncCatalog(forceRefresh = false)
+        }
         checkBridgeHealth(autoRenderIfOnline = false)
+    }
+
+    // ---- Dynamic Template Catalog & Real Upstream Offline Base-Frame Resolution ----
+
+    fun refreshTemplateCatalog() {
+        viewModelScope.launch {
+            container.mseTemplateCatalogRepository.syncCatalog(forceRefresh = true)
+            val state = catalogSyncState.value
+            _messages.tryEmit(
+                "Catalog synced: ${state.syncedGamesCount} games • ${state.syncedStylesCount} styles"
+            )
+        }
+    }
+
+    fun toggleOptInPackChannel(filter: CatalogPackFilter, enabled: Boolean) {
+        viewModelScope.launch {
+            container.mseTemplateCatalogRepository.setOptInPackEnabled(filter, enabled)
+        }
+    }
+
+    fun selectOfflineFrameVariant(variantKey: String) {
+        val current = _offlineFrame.value ?: return
+        _offlineFrame.value = current.copy(activeVariantKey = variantKey)
+        // Persist chosen card color cleanly into the `.mse-set` card record
+        val activeIdx = activeCardIndex.value
+        val activeArchive = archive.value ?: return
+        if (activeArchive.document.game.equals("magic", ignoreCase = true)) {
+            viewModelScope.launch {
+                container.mseWorkspaceRepository.updateCardField(activeIdx, "card color", variantKey)
+            }
+        }
+    }
+
+    fun resolveLocalFontFile(familyName: String?): File? =
+        container.fontCatalogRepository.resolveLocalFontFile(familyName)
+
+    private fun resolveOfflineBaseFrameForStyle(style: DiscoveredStyle?) {
+        if (style == null) {
+            _offlineFrame.value = null
+            return
+        }
+        val styleKey = "${style.packRepo}:${style.folderName}"
+        viewModelScope.launch {
+            _offlineFrame.value = ResolvedOfflineFrame(
+                styleKey = styleKey,
+                variants = emptyList(),
+                activeVariantKey = null,
+                isLoading = true,
+            )
+            val variants = container.mseTemplateCatalogRepository.resolveOfflineFrameVariants(style)
+            val inferredKey = inferActiveVariantKeyForCurrentCard(variants)
+            _offlineFrame.value = ResolvedOfflineFrame(
+                styleKey = styleKey,
+                variants = variants,
+                activeVariantKey = inferredKey,
+                isLoading = false,
+            )
+        }
+    }
+
+    private fun inferActiveVariantKeyForCurrentCard(variants: List<FrameVariantOption>): String? {
+        if (variants.isEmpty()) return null
+        val card = archive.value?.document?.cards?.getOrNull(activeCardIndex.value)
+        val explicitColor = card?.field("card color")?.trim()?.lowercase().orEmpty()
+        if (explicitColor.isNotEmpty()) {
+            variants.firstOrNull {
+                explicitColor.contains(it.key.lowercase()) || it.key.equals(explicitColor, ignoreCase = true)
+            }?.let { return it.key }
+        }
+
+        // Infer Magic frame color from casting cost or super type if not explicitly set
+        val cost = card?.castingCost.orEmpty().uppercase()
+        val superType = card?.superType.orEmpty().lowercase()
+        val detectedKey = when {
+            superType.contains("land") -> "land"
+            superType.contains("artifact") -> "artifact"
+            else -> {
+                val present = buildList {
+                    if (cost.contains('W')) add("white")
+                    if (cost.contains('U')) add("blue")
+                    if (cost.contains('B')) add("black")
+                    if (cost.contains('R')) add("red")
+                    if (cost.contains('G')) add("green")
+                }
+                when {
+                    present.size >= 2 -> "multicolor"
+                    present.size == 1 -> present.first()
+                    else -> "colorless"
+                }
+            }
+        }
+        return variants.firstOrNull { it.key.equals(detectedKey, ignoreCase = true) }?.key
+            ?: variants.firstOrNull()?.key
+    }
+
+    private fun syncVariantSelectionToCurrentCard() {
+        val current = _offlineFrame.value ?: return
+        if (current.variants.isEmpty()) return
+        val inferred = inferActiveVariantKeyForCurrentCard(current.variants)
+        if (inferred != null && inferred != current.activeVariantKey) {
+            _offlineFrame.value = current.copy(activeVariantKey = inferred)
+        }
     }
 
     // ---- Bridge Diagnostics & Rendering ----
@@ -187,6 +328,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
             val templatesRes = container.mseBridgeClient.getTemplates()
             if (templatesRes is BridgeResult.Success) {
                 _bridgeTemplates.value = templatesRes.data.templates
+                container.mseTemplateCatalogRepository.mergeBridgeTemplates(templatesRes.data.templates)
             }
             container.fontCatalogRepository.refreshFromBridge()
         }
@@ -348,7 +490,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun createNewSetFromWizard(
         title: String,
         gameId: String,
-        styleOption: MseStyleOption,
+        styleOption: DiscoveredStyle,
         onOpened: () -> Unit,
     ) {
         viewModelScope.launch {
@@ -358,9 +500,10 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                 title = title,
                 game = gameId,
                 stylesheet = styleOption.stylesheetId,
-                styleOption = styleOption,
+                discoveredStyle = styleOption,
             )
             _renderState.value = CardRenderState.Idle
+            resolveOfflineBaseFrameForStyle(styleOption)
             onOpened()
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
@@ -373,6 +516,14 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
             val result = container.mseWorkspaceRepository.openSetFromUri(uri)
             result.onSuccess { loaded ->
                 _renderState.value = CardRenderState.Idle
+                val matched = container.mseTemplateCatalogRepository.findStyle(
+                    gameId = loaded.document.game,
+                    stylesheetId = loaded.document.stylesheet,
+                )
+                if (matched != null) {
+                    container.mseWorkspaceRepository.applyDiscoveredStyleSpec(matched)
+                }
+                resolveOfflineBaseFrameForStyle(matched)
                 _messages.tryEmit("Opened ${loaded.document.setTitle} (${loaded.document.cards.size} cards)")
                 onOpened()
                 if (_bridgeHealth.value is BridgeHealthState.Online) {
@@ -387,8 +538,16 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun openRecentSet(record: RecentSetRecord, onOpened: () -> Unit) {
         viewModelScope.launch {
             container.mseWorkspaceRepository.openRecentSet(record)
-                .onSuccess {
+                .onSuccess { loaded ->
                     _renderState.value = CardRenderState.Idle
+                    val matched = container.mseTemplateCatalogRepository.findStyle(
+                        gameId = loaded.document.game,
+                        stylesheetId = loaded.document.stylesheet,
+                    )
+                    if (matched != null) {
+                        container.mseWorkspaceRepository.applyDiscoveredStyleSpec(matched)
+                    }
+                    resolveOfflineBaseFrameForStyle(matched)
                     onOpened()
                     if (_bridgeHealth.value is BridgeHealthState.Online) {
                         requestBridgeRender()
@@ -424,6 +583,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun closeActiveSet(onClosed: () -> Unit) {
         container.mseWorkspaceRepository.closeActiveSet()
         _renderState.value = CardRenderState.Idle
+        _offlineFrame.value = null
         onClosed()
     }
 
@@ -437,11 +597,12 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    fun switchStylesheet(option: MseStyleOption) {
+    fun switchStylesheet(option: DiscoveredStyle) {
         viewModelScope.launch {
             container.settingsRepository.updateEngineSplit(option.engineSplit)
             container.settingsRepository.updatePhysicalProfile(option.physicalProfile)
             container.mseWorkspaceRepository.switchStylesheet(option)
+            resolveOfflineBaseFrameForStyle(option)
             _messages.tryEmit("Style set to ${option.displayName}.")
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
@@ -449,10 +610,29 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    // ---- Cards, Set Info & Keywords Editing ----
+    // ---- Undo / Redo & Card / Set Info / Keywords Editing ----
+
+    fun undo() {
+        if (container.mseWorkspaceRepository.undo()) {
+            syncVariantSelectionToCurrentCard()
+            if (_bridgeHealth.value is BridgeHealthState.Online) {
+                requestBridgeRender()
+            }
+        }
+    }
+
+    fun redo() {
+        if (container.mseWorkspaceRepository.redo()) {
+            syncVariantSelectionToCurrentCard()
+            if (_bridgeHealth.value is BridgeHealthState.Online) {
+                requestBridgeRender()
+            }
+        }
+    }
 
     fun selectCard(index: Int) {
         container.mseWorkspaceRepository.selectCard(index)
+        syncVariantSelectionToCurrentCard()
         if (_bridgeHealth.value is BridgeHealthState.Online) {
             requestBridgeRender()
         }
@@ -461,6 +641,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun addBlankCard() {
         viewModelScope.launch {
             container.mseWorkspaceRepository.addBlankCard()
+            syncVariantSelectionToCurrentCard()
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
             }
@@ -470,6 +651,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun duplicateCard(cardIndex: Int) {
         viewModelScope.launch {
             container.mseWorkspaceRepository.duplicateCard(cardIndex)
+            syncVariantSelectionToCurrentCard()
             _messages.tryEmit("Duplicated card.")
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
@@ -480,20 +662,8 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun deleteCard(cardIndex: Int) {
         viewModelScope.launch {
             container.mseWorkspaceRepository.deleteCard(cardIndex)
+            syncVariantSelectionToCurrentCard()
             _messages.tryEmit("Deleted card.")
-            if (_bridgeHealth.value is BridgeHealthState.Online) {
-                requestBridgeRender()
-            }
-        }
-    }
-
-    fun updateActiveCardField(fieldKey: String, newValue: String?) {
-        viewModelScope.launch {
-            container.mseWorkspaceRepository.updateCardField(
-                cardIndex = activeCardIndex.value,
-                fieldKey = fieldKey,
-                newValue = newValue,
-            )
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
             }
@@ -502,13 +672,11 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
 
     fun updateActiveCardFields(updates: Map<String, String?>) {
         viewModelScope.launch {
-            updates.forEach { (k, v) ->
-                container.mseWorkspaceRepository.updateCardField(
-                    cardIndex = activeCardIndex.value,
-                    fieldKey = k,
-                    newValue = v,
-                )
-            }
+            container.mseWorkspaceRepository.updateCardFields(
+                cardIndex = activeCardIndex.value,
+                updates = updates,
+            )
+            syncVariantSelectionToCurrentCard()
             if (_bridgeHealth.value is BridgeHealthState.Online) {
                 requestBridgeRender()
             }
@@ -564,8 +732,6 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
             _messages.tryEmit("Deleted keyword.")
         }
     }
-
-    fun rawSetText(): String = container.mseWorkspaceRepository.rawSetTextPreview()
 
     // ---- Fonts & Commercial License Flow ----
 

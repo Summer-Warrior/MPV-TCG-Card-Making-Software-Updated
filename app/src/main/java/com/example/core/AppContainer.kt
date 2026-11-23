@@ -3,6 +3,7 @@ package com.example.core
 import android.content.Context
 import com.example.data.bridge.MseBridgeClient
 import com.example.data.fonts.FontCatalogRepository
+import com.example.data.mse.MseTemplateCatalogRepository
 import com.example.data.mse.MseWorkspaceRepository
 import com.example.data.settings.SettingsRepository
 import com.example.data.upstream.GitHubUpdateWatcher
@@ -21,7 +22,7 @@ class AppContainer(context: Context) {
     val moshi: Moshi = Moshi.Builder().build()
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(25, TimeUnit.SECONDS)
         .writeTimeout(25, TimeUnit.SECONDS)
         .addInterceptor(
@@ -42,6 +43,12 @@ class AppContainer(context: Context) {
     val mseWorkspaceRepository = MseWorkspaceRepository(
         context = appContext,
         moshi = moshi,
+    )
+
+    val mseTemplateCatalogRepository = MseTemplateCatalogRepository(
+        context = appContext,
+        moshi = moshi,
+        okHttpClient = okHttpClient,
     )
 
     val fontCatalogRepository = FontCatalogRepository(

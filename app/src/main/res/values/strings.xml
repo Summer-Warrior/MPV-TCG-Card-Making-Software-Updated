@@ -20,6 +20,7 @@
     <string name="tab_set_info">Set Info</string>
     <string name="tab_style">Style</string>
     <string name="tab_keywords">Keywords</string>
+    <string name="tab_stats">Stats</string>
 
     <!-- Bridge & Diagnostics -->
     <string name="bridge_status_online">Online</string>
@@ -36,6 +37,7 @@
     <string name="calibration_label">Physical Card Calibration</string>
     <string name="calibration_hint">Hold a physical card against the glass and adjust until edges align.</string>
     <string name="tap_to_add_artwork">Tap to add artwork</string>
+    <string name="offline_frame_caption">Offline Frame Preview • Connect Termux MSE for full scripted render</string>
     <string name="clear_art_action">Clear Art</string>
     <string name="new_card_short">New</string>
     <string name="crop_art_title">Crop Artwork</string>

@@ -166,4 +166,122 @@ class MseParsersUnitTest {
         assertEquals("Aether Astrolabe", roundTrip.cards.first().name)
         assertNull(roundTrip.cards.first().image)
     }
+
+    @Test
+    fun parseGameTextExtractsExactMseGameMetadata() {
+        val gameText = """
+            mse version: 2.0.0
+            short name: Magic
+            full name: Magic the Gathering
+            icon: card-back.png
+            position hint: 01
+        """.trimIndent()
+
+        val parsed = MseStyleParser.parseGameText(gameText, "magic.mse-game")
+        assertEquals("magic", parsed.gameId)
+        assertEquals("Magic", parsed.shortName)
+        assertEquals("Magic the Gathering", parsed.fullName)
+        assertEquals("card-back.png", parsed.iconFile)
+        assertEquals(1, parsed.positionHint)
+    }
+
+    @Test
+    fun parseStyleTextExtractsIconDependsOnChoiceImagesAndValidatesGeometry() {
+        val styleText = """
+            mse version: 2.0.0
+            game: magic
+            short name: M15 Mainframe
+            full name: M15 Mainframe
+            icon: card-sample.png
+            position hint: 001
+            depends on:
+            	package: magic.mse-game
+            	version: 2020-04-25
+            depends on:
+            	package: magic-blends.mse-include
+            	version: 2015-05-23
+            card width: 375
+            card height: 523
+            card dpi: 150
+            card style:
+            	card color:
+            		left: 0
+            		top: 0
+            		width: 375
+            		height: 523
+            		z index: 0
+            		default: wcard.jpg
+            		choice images:
+            			white: wcard.jpg
+            			blue: ucard.jpg
+            			red: rcard.jpg
+            	name:
+            		left: 30
+            		top: 26
+            		width: 315
+            		height: 28
+            		z index: 2
+            		font:
+            			name: Beleren Bold
+            			size: 16
+            			color: rgb(0,0,0)
+            	image:
+            		left: 29
+            		top: 60
+            		width: 316
+            		height: 231
+            		z index: 1
+            	rule text:
+            		left: 29
+            		top: 327
+            		width: 317
+            		height: 154
+            		z index: 2
+        """.trimIndent()
+
+        val spec = MseStyleParser.parseStyleText(styleText, "magic-m15-altered.mse-style")
+        assertEquals("card-sample.png", spec.iconFile)
+        assertEquals(1, spec.positionHint)
+        assertTrue(spec.dependsOn.contains("magic-blends.mse-include"))
+        assertEquals("wcard.jpg", spec.defaultFrameImage)
+        assertEquals("ucard.jpg", spec.baseFrameChoices["blue"])
+        assertEquals("rcard.jpg", spec.baseFrameChoices["red"])
+        assertTrue("Valid style hitboxes should pass composite geometry validation", spec.hasValidCompositeGeometry())
+
+        val collapsedStyle = """
+            game: custom
+            card width: 375
+            card height: 523
+            card style:
+            	name:
+            		left: 0
+            		top: 0
+            		width: 100
+            		height: 20
+            	image:
+            		left: 0
+            		top: 0
+            		width: 100
+            		height: 100
+            	rule text:
+            		left: 0
+            		top: 0
+            		width: 100
+            		height: 80
+        """.trimIndent()
+        val collapsedSpec = MseStyleParser.parseStyleText(collapsedStyle, "collapsed.mse-style")
+        assertTrue(
+            "Origin-collapsed hitboxes must NOT pass composite geometry validation",
+            !collapsedSpec.hasValidCompositeGeometry(),
+        )
+    }
+
+    @Test
+    fun parseManaValueHandlesBraceAndCompactManaCosts() {
+        assertEquals(4, com.example.ui.workspace.parseManaValue("{2}{U}{U}"))
+        assertEquals(5, com.example.ui.workspace.parseManaValue("3RG"))
+        assertEquals(1, com.example.ui.workspace.parseManaValue("{X}{W}"))
+        assertEquals(0, com.example.ui.workspace.parseManaValue(""))
+        assertEquals(2, com.example.ui.workspace.parseManaValue("WW"))
+    }
 }

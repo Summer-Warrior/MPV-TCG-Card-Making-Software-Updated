@@ -31,12 +31,17 @@ data class RecentSetRecord(
     @Json(name = "last_opened_at") val lastOpenedAt: String,
 )
 
+private data class WorkspaceSnapshot(
+    val archive: MseSetArchive,
+    val activeCardIndex: Int,
+)
+
 /**
- * Manages open `.mse-set` archives, real persisted Recent Sets, unsaved-change tracking,
- * and active `.mse-style` geometry specs.
+ * Manages open `.mse-set` archives, real persisted Recent Sets, real Undo/Redo edit history,
+ * unsaved-change tracking, and active `.mse-style` geometry specs.
  *
  * Cold-start contract: `archive` starts strictly `null` so the app launches into the authentic
- * Magic Set Editor Welcome Window (never cold-starting into an Untitled Set wireframe).
+ * Magic Set Editor Welcome Window.
  */
 class MseWorkspaceRepository(
     private val context: Context,
@@ -67,11 +72,66 @@ class MseWorkspaceRepository(
     private val _hasUnsavedChanges = MutableStateFlow(false)
     val hasUnsavedChanges: StateFlow<Boolean> = _hasUnsavedChanges.asStateFlow()
 
+    private val undoStack = ArrayDeque<WorkspaceSnapshot>()
+    private val redoStack = ArrayDeque<WorkspaceSnapshot>()
+
+    private val _canUndo = MutableStateFlow(false)
+    val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
+
+    private val _canRedo = MutableStateFlow(false)
+    val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
+
+    private fun pushUndoSnapshot() {
+        val current = _archive.value ?: return
+        undoStack.addLast(WorkspaceSnapshot(current, _activeCardIndex.value))
+        while (undoStack.size > MAX_HISTORY_DEPTH) {
+            undoStack.removeFirst()
+        }
+        redoStack.clear()
+        syncHistoryFlags()
+    }
+
+    private fun clearHistory() {
+        undoStack.clear()
+        redoStack.clear()
+        syncHistoryFlags()
+    }
+
+    private fun syncHistoryFlags() {
+        _canUndo.value = undoStack.isNotEmpty()
+        _canRedo.value = redoStack.isNotEmpty()
+    }
+
+    fun undo(): Boolean {
+        val current = _archive.value ?: return false
+        if (undoStack.isEmpty()) return false
+        val previous = undoStack.removeLast()
+        redoStack.addLast(WorkspaceSnapshot(current, _activeCardIndex.value))
+        _archive.value = previous.archive
+        val maxIdx = (previous.archive.document.cards.size - 1).coerceAtLeast(0)
+        _activeCardIndex.value = previous.activeCardIndex.coerceIn(0, maxIdx)
+        _hasUnsavedChanges.value = true
+        syncHistoryFlags()
+        return true
+    }
+
+    fun redo(): Boolean {
+        val current = _archive.value ?: return false
+        if (redoStack.isEmpty()) return false
+        val next = redoStack.removeLast()
+        undoStack.addLast(WorkspaceSnapshot(current, _activeCardIndex.value))
+        _archive.value = next.archive
+        val maxIdx = (next.archive.document.cards.size - 1).coerceAtLeast(0)
+        _activeCardIndex.value = next.activeCardIndex.coerceIn(0, maxIdx)
+        _hasUnsavedChanges.value = true
+        syncHistoryFlags()
+        return true
+    }
+
     private fun loadRecentSetsSync(): List<RecentSetRecord> {
         if (!recentSetsFile.exists() || recentSetsFile.length() == 0L) return emptyList()
         return runCatching {
             val loaded = recentListAdapter.fromJson(recentSetsFile.readText()).orEmpty()
-            // Keep only entries whose real local `.mse-set` file exists
             loaded.filter { File(it.localFilePath).exists() }
         }.getOrDefault(emptyList())
     }
@@ -120,7 +180,7 @@ class MseWorkspaceRepository(
         title: String,
         game: String,
         stylesheet: String,
-        styleOption: MseStyleOption? = null,
+        discoveredStyle: DiscoveredStyle? = null,
     ): MseSetArchive = withContext(Dispatchers.IO) {
         val setId = "set_${UUID.randomUUID().toString().take(8)}"
         val safeTitle = title.trim().ifEmpty { "Untitled Set" }
@@ -133,22 +193,14 @@ class MseWorkspaceRepository(
         ).copy(id = setId)
 
         val persisted = writeArchiveToLocalFile(blank)
+        clearHistory()
         _archive.value = persisted
         _activeCardIndex.value = 0
         _hasUnsavedChanges.value = false
         recordInRecentSets(persisted)
 
-        if (styleOption != null) {
-            _styleSpec.value = _styleSpec.value.copy(
-                stylesheetId = styleOption.stylesheetId,
-                game = styleOption.gameId,
-                shortName = styleOption.displayName,
-                fullName = "${MseTemplateCatalog.displayGameName(styleOption.gameId)} — ${styleOption.displayName}",
-                cardWidthPx = styleOption.cardWidthPx,
-                cardHeightPx = styleOption.cardHeightPx,
-                cardDpi = styleOption.cardDpi,
-                sourceLabel = styleOption.packSplit,
-            )
+        if (discoveredStyle != null) {
+            applyDiscoveredStyleSpec(discoveredStyle)
         }
         persisted
     }
@@ -168,6 +220,7 @@ class MseWorkspaceRepository(
             }.copy(id = setId)
 
             val persisted = writeArchiveToLocalFile(loaded)
+            clearHistory()
             _archive.value = persisted
             _activeCardIndex.value = 0
             _hasUnsavedChanges.value = false
@@ -194,6 +247,7 @@ class MseWorkspaceRepository(
                     id = record.id,
                     localFilePath = file.absolutePath,
                 )
+                clearHistory()
                 _archive.value = loaded
                 _activeCardIndex.value = 0
                 _hasUnsavedChanges.value = false
@@ -206,7 +260,6 @@ class MseWorkspaceRepository(
         runCatching {
             val current = _archive.value ?: throw IllegalStateException("No active set to save.")
             val persisted = writeArchiveToLocalFile(current)
-            // If opened from a writable SAF URI, attempt write-back safely
             persisted.sourceUri?.let { uriStr ->
                 runCatching {
                     context.contentResolver.openOutputStream(Uri.parse(uriStr), "wt")?.use { out ->
@@ -237,6 +290,7 @@ class MseWorkspaceRepository(
     }
 
     fun closeActiveSet() {
+        clearHistory()
         _archive.value = null
         _activeCardIndex.value = 0
         _hasUnsavedChanges.value = false
@@ -255,22 +309,34 @@ class MseWorkspaceRepository(
         }
     }
 
-    suspend fun switchStylesheet(option: MseStyleOption): MseSetArchive? = withContext(Dispatchers.IO) {
+    fun applyDiscoveredStyleSpec(style: DiscoveredStyle) {
+        val spec = style.toStyleSpec()
+        _styleSpec.value = if (spec.hitboxes.isNotEmpty()) {
+            spec
+        } else {
+            // Preserve valid parsed dimensions while keeping fallback geometry only for matching game
+            spec.copy(
+                hitboxes = if (style.gameId.equals("magic", ignoreCase = true)) {
+                    scaleHitboxes(
+                        MseStyleParser.defaultStandardGeometrySpec(),
+                        targetW = style.cardWidthPx,
+                        targetH = style.cardHeightPx,
+                    )
+                } else {
+                    emptyList()
+                }
+            )
+        }
+    }
+
+    suspend fun switchStylesheet(style: DiscoveredStyle): MseSetArchive? = withContext(Dispatchers.IO) {
         val current = _archive.value ?: return@withContext null
-        val updatedDoc = current.document.withTopLevelScalar("stylesheet", option.stylesheetId)
+        pushUndoSnapshot()
+        val updatedDoc = current.document.withTopLevelScalar("stylesheet", style.stylesheetId)
         val updated = current.copy(document = updatedDoc)
         _archive.value = updated
         _hasUnsavedChanges.value = true
-        _styleSpec.value = _styleSpec.value.copy(
-            stylesheetId = option.stylesheetId,
-            game = option.gameId,
-            shortName = option.displayName,
-            fullName = "${MseTemplateCatalog.displayGameName(option.gameId)} — ${option.displayName}",
-            cardWidthPx = option.cardWidthPx,
-            cardHeightPx = option.cardHeightPx,
-            cardDpi = option.cardDpi,
-            sourceLabel = option.packSplit,
-        )
+        applyDiscoveredStyleSpec(style)
         updated
     }
 
@@ -303,6 +369,7 @@ class MseWorkspaceRepository(
 
     suspend fun addBlankCard(): Int = withContext(Dispatchers.IO) {
         val current = _archive.value ?: return@withContext 0
+        pushUndoSnapshot()
         val updatedDoc = current.document.withAppendedBlankCard(MseSetParser.currentMseTimestamp())
         val updated = current.copy(document = updatedDoc)
         _archive.value = updated
@@ -314,6 +381,7 @@ class MseWorkspaceRepository(
 
     suspend fun duplicateCard(cardIndex: Int): Int = withContext(Dispatchers.IO) {
         val current = _archive.value ?: return@withContext 0
+        pushUndoSnapshot()
         val updatedDoc = current.document.withDuplicatedCard(cardIndex, MseSetParser.currentMseTimestamp())
         _archive.value = current.copy(document = updatedDoc)
         _hasUnsavedChanges.value = true
@@ -324,6 +392,7 @@ class MseWorkspaceRepository(
 
     suspend fun deleteCard(cardIndex: Int): Int = withContext(Dispatchers.IO) {
         val current = _archive.value ?: return@withContext 0
+        pushUndoSnapshot()
         val afterDelete = current.document.withDeletedCard(cardIndex)
         val finalDoc = if (afterDelete.cards.isEmpty()) {
             afterDelete.withAppendedBlankCard(MseSetParser.currentMseTimestamp())
@@ -337,20 +406,28 @@ class MseWorkspaceRepository(
         newIdx
     }
 
-    suspend fun updateCardField(cardIndex: Int, fieldKey: String, newValue: String?): MseSetArchive? =
+    suspend fun updateCardFields(cardIndex: Int, updates: Map<String, String?>): MseSetArchive? =
         withContext(Dispatchers.IO) {
             val current = _archive.value ?: return@withContext null
-            val updatedDoc = current.document
-                .withCardFieldUpdated(cardIndex, fieldKey, newValue)
-                .withCardFieldUpdated(cardIndex, "time modified", MseSetParser.currentMseTimestamp())
-            val updated = current.copy(document = updatedDoc)
+            if (updates.isEmpty()) return@withContext current
+            pushUndoSnapshot()
+            var doc = current.document
+            updates.forEach { (fieldKey, newValue) ->
+                doc = doc.withCardFieldUpdated(cardIndex, fieldKey, newValue)
+            }
+            doc = doc.withCardFieldUpdated(cardIndex, "time modified", MseSetParser.currentMseTimestamp())
+            val updated = current.copy(document = doc)
             _archive.value = updated
             _hasUnsavedChanges.value = true
             updated
         }
 
+    suspend fun updateCardField(cardIndex: Int, fieldKey: String, newValue: String?): MseSetArchive? =
+        updateCardFields(cardIndex, mapOf(fieldKey to newValue))
+
     suspend fun updateSetInfo(info: MseSetInfo): MseSetArchive? = withContext(Dispatchers.IO) {
         val current = _archive.value ?: return@withContext null
+        pushUndoSnapshot()
         val updated = current.copy(document = current.document.withSetInfoUpdated(info))
         _archive.value = updated
         _hasUnsavedChanges.value = true
@@ -360,6 +437,7 @@ class MseWorkspaceRepository(
     suspend fun addKeyword(keyword: String, match: String, reminder: String, rules: String) =
         withContext(Dispatchers.IO) {
             val current = _archive.value ?: return@withContext
+            pushUndoSnapshot()
             val updatedDoc = current.document.withAddedKeyword(keyword, match, reminder, rules)
             _archive.value = current.copy(document = updatedDoc)
             _hasUnsavedChanges.value = true
@@ -368,6 +446,7 @@ class MseWorkspaceRepository(
     suspend fun updateKeyword(index: Int, keyword: String, match: String, reminder: String, rules: String) =
         withContext(Dispatchers.IO) {
             val current = _archive.value ?: return@withContext
+            pushUndoSnapshot()
             val updatedDoc = current.document.withUpdatedKeyword(index, keyword, match, reminder, rules)
             _archive.value = current.copy(document = updatedDoc)
             _hasUnsavedChanges.value = true
@@ -375,6 +454,7 @@ class MseWorkspaceRepository(
 
     suspend fun deleteKeyword(index: Int) = withContext(Dispatchers.IO) {
         val current = _archive.value ?: return@withContext
+        pushUndoSnapshot()
         val updatedDoc = current.document.withDeletedKeyword(index)
         _archive.value = current.copy(document = updatedDoc)
         _hasUnsavedChanges.value = true
@@ -386,6 +466,7 @@ class MseWorkspaceRepository(
     suspend fun embedCardArt(cardIndex: Int, imageBytes: ByteArray): MseSetArchive? =
         withContext(Dispatchers.IO) {
             val current = _archive.value ?: return@withContext null
+            pushUndoSnapshot()
             val existingImageKey = current.document.cards.getOrNull(cardIndex)?.image
             val entryName = existingImageKey ?: nextAvailableImageEntryName(current.embeddedBlobs.keys)
             val updatedBlobs = current.embeddedBlobs.toMutableMap().apply {
@@ -408,6 +489,7 @@ class MseWorkspaceRepository(
      */
     suspend fun clearCardArt(cardIndex: Int): MseSetArchive? = withContext(Dispatchers.IO) {
         val current = _archive.value ?: return@withContext null
+        pushUndoSnapshot()
         val oldImageName = current.document.cards.getOrNull(cardIndex)?.image
         val updatedDoc = current.document
             .withCardFieldUpdated(cardIndex, "image", null)
@@ -433,6 +515,7 @@ class MseWorkspaceRepository(
 
     suspend fun applyFontOverride(fontFamily: String): MseSetArchive? = withContext(Dispatchers.IO) {
         val current = _archive.value ?: return@withContext null
+        pushUndoSnapshot()
         val sheetKey = "${current.document.game}-${current.document.stylesheet}"
         val updatedDoc = current.document.withStylingFontOverride(sheetKey, fontFamily)
         val updated = current.copy(document = updatedDoc)
@@ -449,6 +532,20 @@ class MseWorkspaceRepository(
     fun rawSetTextPreview(): String =
         _archive.value?.let { MseSetParser.serializeSetText(it.document) }.orEmpty()
 
+    private fun scaleHitboxes(source: MseStyleSpec, targetW: Int, targetH: Int): List<MseHitbox> {
+        if (source.cardWidthPx <= 0 || source.cardHeightPx <= 0) return source.hitboxes
+        val sx = targetW.toFloat() / source.cardWidthPx.toFloat()
+        val sy = targetH.toFloat() / source.cardHeightPx.toFloat()
+        return source.hitboxes.map { h ->
+            h.copy(
+                left = h.left * sx,
+                top = h.top * sy,
+                width = h.width * sx,
+                height = h.height * sy,
+            )
+        }
+    }
+
     private fun nextAvailableImageEntryName(existingNames: Set<String>): String {
         var i = 1
         while (existingNames.contains("image$i")) {
@@ -464,5 +561,9 @@ class MseWorkspaceRepository(
                     if (cursor.moveToFirst()) cursor.getString(0) else null
                 }
         }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/')
+    }
+
+    companion object {
+        private const val MAX_HISTORY_DEPTH = 50
     }
 }

@@ -50,7 +50,7 @@ object StudioRoutes {
 
 /**
  * Root Compose Navigation Shell — Authentic Magic Set Editor workflow.
- * Launches directly into the MSE Welcome Window (zero generic 4-tab developer bottom bar).
+ * Launches directly into the MSE Welcome Window.
  */
 @Composable
 fun TcgStudioApp(viewModel: StudioViewModel) {
@@ -59,10 +59,16 @@ fun TcgStudioApp(viewModel: StudioViewModel) {
     val activeCardIndex by viewModel.activeCardIndex.collectAsStateWithLifecycle()
     val recentSets by viewModel.recentSets.collectAsStateWithLifecycle()
     val hasUnsavedChanges by viewModel.hasUnsavedChanges.collectAsStateWithLifecycle()
+    val canUndo by viewModel.canUndo.collectAsStateWithLifecycle()
+    val canRedo by viewModel.canRedo.collectAsStateWithLifecycle()
     val styleSpec by viewModel.styleSpec.collectAsStateWithLifecycle()
     val bridgeHealth by viewModel.bridgeHealth.collectAsStateWithLifecycle()
     val renderState by viewModel.renderState.collectAsStateWithLifecycle()
+    val offlineFrame by viewModel.offlineFrame.collectAsStateWithLifecycle()
     val bridgeTemplates by viewModel.bridgeTemplates.collectAsStateWithLifecycle()
+    val discoveredGames by viewModel.discoveredGames.collectAsStateWithLifecycle()
+    val discoveredStyles by viewModel.discoveredStyles.collectAsStateWithLifecycle()
+    val catalogSyncState by viewModel.catalogSyncState.collectAsStateWithLifecycle()
     val fonts by viewModel.fonts.collectAsStateWithLifecycle()
     val manifest by viewModel.manifest.collectAsStateWithLifecycle()
     val commitChecks by viewModel.commitChecks.collectAsStateWithLifecycle()
@@ -103,8 +109,12 @@ fun TcgStudioApp(viewModel: StudioViewModel) {
                 composable(StudioRoutes.WELCOME) {
                     WelcomeScreen(
                         bridgeHealth = bridgeHealth,
-                        bridgeTemplates = bridgeTemplates,
+                        discoveredGames = discoveredGames,
+                        discoveredStyles = discoveredStyles,
+                        catalogSyncState = catalogSyncState,
                         recentSets = recentSets,
+                        onRefreshCatalog = viewModel::refreshTemplateCatalog,
+                        onToggleOptInPack = viewModel::toggleOptInPackChannel,
                         onOpenBridgeSheet = { showBridgeSheet = true },
                         onCreateNewSet = { title, gameId, styleOption ->
                             viewModel.createNewSetFromWizard(
@@ -138,12 +148,22 @@ fun TcgStudioApp(viewModel: StudioViewModel) {
                             archive = activeArchive,
                             activeCardIndex = activeCardIndex,
                             hasUnsavedChanges = hasUnsavedChanges,
+                            canUndo = canUndo,
+                            canRedo = canRedo,
                             styleSpec = styleSpec,
                             bridgeHealth = bridgeHealth,
                             renderState = renderState,
-                            bridgeTemplates = bridgeTemplates,
+                            offlineFrame = offlineFrame,
+                            discoveredGames = discoveredGames,
+                            discoveredStyles = discoveredStyles,
+                            catalogSyncState = catalogSyncState,
                             fonts = fonts,
                             isFontBusy = isFontBusy,
+                            resolveLocalFontFile = viewModel::resolveLocalFontFile,
+                            onUndo = viewModel::undo,
+                            onRedo = viewModel::redo,
+                            onRefreshCatalog = viewModel::refreshTemplateCatalog,
+                            onSelectOfflineFrameVariant = viewModel::selectOfflineFrameVariant,
                             onRequestCloseSet = {
                                 viewModel.closeActiveSet {
                                     navController.popBackStack(StudioRoutes.WELCOME, inclusive = false)

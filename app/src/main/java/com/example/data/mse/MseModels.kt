@@ -476,6 +476,20 @@ data class MseHitbox(
     val height: Float,
     val zIndex: Int = 0,
     val fontFamily: String? = null,
+    val fontSize: Float? = null,
+    val fontColorHex: String? = null,
+    val alignment: String? = null,
+)
+
+data class ParsedMseGameMetadata(
+    val gameId: String,
+    val shortName: String,
+    val fullName: String,
+    val iconFile: String?,
+    val positionHint: Int,
+    val cardWidthPx: Int?,
+    val cardHeightPx: Int?,
+    val cardDpi: Int?,
 )
 
 data class MseStyleSpec(
@@ -489,9 +503,17 @@ data class MseStyleSpec(
     val hitboxes: List<MseHitbox>,
     val referencedFonts: List<String>,
     val sourceLabel: String,
+    val iconFile: String? = null,
+    val positionHint: Int = 999,
+    val dependsOn: List<String> = emptyList(),
+    val baseFrameChoices: Map<String, String> = emptyMap(),
+    val defaultFrameImage: String? = null,
+    val usesScriptedBackground: Boolean = false,
 ) {
     val artHitbox: MseHitbox?
-        get() = hitboxes.firstOrNull { it.field == "image" || it.field == "art" }
+        get() = hitboxes.firstOrNull {
+            it.field == "image" || it.field == "art" || it.field == "image 1" || it.field == "card image"
+        }
 
     val artAspectRatio: Float
         get() {
@@ -502,4 +524,30 @@ data class MseStyleSpec(
                 316f / 231f
             }
         }
+
+    /**
+     * Checks that parsed numeric `.mse-style` bounding boxes are sensible, inside card bounds,
+     * and do not collapse onto (0, 0) or collide excessively.
+     */
+    fun hasValidCompositeGeometry(): Boolean {
+        if (cardWidthPx <= 0 || cardHeightPx <= 0) return false
+        val usable = hitboxes.filter { box ->
+            val key = box.field.lowercase()
+            key != "border" &&
+                key != "card color" &&
+                key != "background" &&
+                key != "frame" &&
+                box.width >= 10f &&
+                box.height >= 8f &&
+                box.left >= -20f &&
+                box.top >= -20f &&
+                box.left < cardWidthPx.toFloat() &&
+                box.top < cardHeightPx.toFloat()
+        }
+        if (usable.size < 2) return false
+        // Guard against purely-scripted styles that resolved multiple boxes to (0,0)
+        val atOriginCount = usable.count { it.left <= 2f && it.top <= 2f }
+        if (atOriginCount >= 2) return false
+        return true
+    }
 }

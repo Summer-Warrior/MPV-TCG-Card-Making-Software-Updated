@@ -38,11 +38,17 @@ Track and respect real upstream GitHub repository splits and branches via an edi
 
 ---
 
-## 4. EXACT 1:1 IRL PHYSICAL CARD EDITING WINDOW
+## 4. EXACT 1:1 IRL PHYSICAL CARD EDITING WINDOW & REAL UPSTREAM BASE-FRAME OFFLINE PREVIEW
 * **Hardware 1:1 Physical Sizing:** Compute exact screen pixels from `LocalContext.current.resources.displayMetrics` (`xdpi`, `ydpi`) and active template dimensions (`cardWidthInches = cardWidthPx / cardDpi`, `cardHeightInches = cardHeightPx / cardDpi`, with real-world card profiles e.g. `63mm × 88mm` MTG/Pokémon and `59mm × 86mm` Yu-Gi-Oh! when DPI metadata is missing).
 * **Physical Card Calibration:** Provide a persistent **Calibration Slider** (user holds an actual physical card against their Android screen glass and locks the scale factor), pinch-to-zoom/pan, and a one-tap **"Snap 1:1 IRL"** button.
-* **Direct Tap-on-Card Editing:** Render transparent touch hitboxes aligned proportionally over the MSE-rendered PNG using the `.mse-style` bounding boxes:
-  * Tap any text/title/cost/type/rules/stat hitbox → Material 3 modal bottom sheet editor with MSE formatting/symbol bar → writes change losslessly into the `.mse-set` ZIP → re-renders via `POST /sets/render`.
+* **Bridge ONLINE Rendering:** Render the 100% pixel-exact PNG returned by `POST /sets/render` at calibrated 1:1 IRL physical dimensions with invisible aligned `.mse-style` tap-to-edit hitboxes over each field.
+* **Bridge OFFLINE — Real Upstream Base-Frame Compositor (NO Fake Canvas/SVG Frames):**
+  * Resolve the active `.mse-style`'s real blank base-frame PNG/JPG image directly from `MagicSetEditorPacks` (`raw.githubusercontent.com` via Coil with disk caching) by inspecting parsed `choice images:`, `default:`, `card color:` / `background:` / `frame:`, and (for scripted styles) a single cached `contents` lookup on the style folder and its primary `depends on:` `.mse-include`/`.mse-style` package (strictly excluding masks, symbols, icons, and `card-sample*`).
+  * Display the real upstream frame inside the exact `card width : card height` physical aspect-ratio container with proportional `.mse-style` coordinate-mapped overlays for artwork (`image` stays strictly `null`/empty until imported, respecting `z index`) and tappable live text previews using locally installed fonts when available.
+  * Provide a compact Frame Color / Variant Selector below the card and a subtle status caption below the card (never stamped on top of the card face).
+  * Fall back cleanly to a non-overlapping structured card layout ONLY when a style has unparseable/purely scripted coordinates or no resolvable upstream frame image.
+* **Direct Tap-on-Card Editing:**
+  * Tap any text/title/cost/type/rules/stat hitbox → Material 3 modal bottom sheet editor with MSE formatting/symbol bar → writes change losslessly into the `.mse-set` ZIP → re-renders via `POST /sets/render` when online or updates the live coordinate-mapped preview when offline.
   * Tap the **blank art hitbox** → launches Android Photo Picker (`PickVisualMedia`) + aspect-ratio-locked cropper matching the `.mse-style` art box → embeds image into the `.mse-set` ZIP (plus a **"Clear Art"** action that returns the art field strictly to `null`/blank) → re-renders.
 
 ---
@@ -90,9 +96,10 @@ Implement **Phase 1 completely with real, compilable Kotlin + Jetpack Compose co
   1. Write `PROJECT_SPEC.md` verbatim at project root.
   2. App architecture, DI, Material 3 navigation shell, DataStore settings, and real `MseBridgeClient` (all Section 2 endpoints + Bridge Health & Termux Diagnostics panel).
   3. Real, lossless Kotlin `.mse-set` ZIP + tab-indented `set` parser/writer (guaranteeing `image` defaults strictly to `null`/empty) and `.mse-style` header/hitbox parser.
-  4. **1:1 IRL Card Editor Screen:** Hardware `xdpi`/`ydpi` physical scaling, persistent **Physical Card Calibration Slider**, pinch-to-zoom + **"Snap 1:1 IRL"** button, live bridge PNG display (or clean diagnostic overlay when bridge is offline—never a fake card drawing), aligned tap-on-card text editing bottom sheet, and empty-by-default art picker/cropper + Clear Art action.
-  5. **Unified Searchable Font Dropdown & Commercial License Browser Payment Flow** (Section 5 complete: `font_catalog.json` seed with real open & commercial TCG font entries + official foundry purchase URLs, dynamic missing-font detection from `.mse-style`, `All / Ready / Free / Paid 🔒` filters, Custom Tabs/browser launch to payment URL, and SAF `.ttf`/`.otf`/`.zip` importer calling `POST /fonts/import`).
+  4. **1:1 IRL Card Editor Screen:** Hardware `xdpi`/`ydpi` physical scaling, persistent **Physical Card Calibration Slider**, pinch-to-zoom + **"Snap 1:1 IRL"** button, live bridge PNG display when online or Real Upstream Base-Frame Offline Preview when offline (never a fake Compose-drawn card frame), aligned tap-on-card text editing bottom sheet, and empty-by-default art picker/cropper + Clear Art action.
+  5. **Unified Searchable Font Dropdown & Commercial License Browser Payment Flow** (Section 5 complete: `font_catalog.json` seed with real open & commercial TCG font entries + official foundry purchase URLs, dynamic missing-font detection from `.mse-style`, `Magic - Fonts` & `Other - Fonts` upstream pack font discovery, `All / Ready / Free / Paid 🔒` filters, Custom Tabs/browser launch to payment URL, and SAF `.ttf`/`.otf`/`.zip` importer calling `POST /fonts/import`).
   6. **Upstream Splits & Manifest Manager Screen:** Reads/edits `upstream_manifest.json` pre-populated with all Section 3 `MagicSetEditorPacks` & `MagicSetEditor2` splits, checks GitHub public ETag/Atom updates, and triggers bridge delta-sync.
+  7. **Complete Dynamic Game & Card Frame Catalog (`MseTemplateCatalogRepository`):** Zero-rate-limit dynamic discovery of all `.mse-game` and `.mse-style` packages across `MagicSetEditorPacks` + local disk cache + visual Game & Style galleries + 5-tab MSE Workspace (`Cards | Set Info | Style | Keywords | Stats`) with Undo/Redo.
 * **Phase 2 (DO NOT BUILD YET):** Firebase Cloud Set Storage per connected card game + offline cache/conflict resolution + Custom Split-Off Sets with external `.mse-set` import & Dynamic Style Binding / Field Mapper.
 * **Phase 3 (DO NOT BUILD YET):** DataEditorX SQLite `.cdb`/`.db` editor, `cardinfo`/`setcode` parser, `.cdb` ↔ `.mse-set` sync, and Card-ID-linked mobile Code Editor.
 * **Phase 4 (DO NOT BUILD YET):** FTS5 Living Rulebook + non-destructive Custom Rules overrides + MSE keyword/script linking + AI Frame Studio with real MSE `--cli` validation loop + Open-Resource auto-updaters.
@@ -100,10 +107,23 @@ Implement **Phase 1 completely with real, compilable Kotlin + Jetpack Compose co
 
 ---
 
-## 9. AUTHENTIC MSE WELCOME WINDOW & CLASSIC TABBED WORKSPACE UI SPECIFICATION
+## 9. AUTHENTIC MSE WELCOME WINDOW & CLASSIC 5-TAB WORKSPACE UI SPECIFICATION
 All phases (Phases 1–5) MUST preserve this clean, responsive (360dp–412dp phone-first) Magic Set Editor 2 UX:
-1. **Startup — Authentic MSE Welcome Window:** Launch into the MSE Welcome Window (never cold-start directly into an Untitled Set wireframe) featuring a compact header (`Magic Set Editor — TCG Studio` + clickable Engine Status Pill), primary actions (**New Set** 2-step Game → Style wizard, **Open Set (`.mse-set`)**, **Open Last Set / Recent Sets** listing only real user sets), and a compact secondary tools row (**Fonts & Licenses**, **Upstream Splits**, **Bridge & Termux**).
-2. **Main Set Window — Classic MSE Tabbed Workspace:** Compact single-row Top App Bar (Home/Back with unsaved-changes check, Set Title + `game • style` subtitle, clickable Bridge Status Dot, Font Picker icon, and Overflow menu) above the 4 classic MSE tabs: **Cards**, **Set Info**, **Style**, and **Keywords**.
-3. **Zero-Overlap 1:1 IRL `Cards` Stage:** Never stamp floating diagnostic pills or red banners over the card face. When the Bridge is ONLINE, render the exact PNG from `POST /sets/render` scaled by hardware `xdpi`/`ydpi` × calibration with invisible aligned `.mse-style` tap hitboxes. When the Bridge is OFFLINE, render a clean non-overlapping structured card layout (`Header Row` → `Artwork Dropzone` → `Type Line` → `Rules & Flavor Box` → dedicated `Footer Row` with Illustrator and `P / T` pill) with strictly empty artwork (`image == null`) until imported. Place a slim `36.dp` scale/zoom bar cleanly BELOW the card and a compact non-clipping MSE bottom card bar (`<` | `Card 1 / N` opening the expandable MSE Card List Table sheet | `>` | `+ New` | Art) at the bottom.
-4. **Zero Developer Jargon & Cohesive Dark Graphite Theme:** Use a refined dark graphite/slate MSE studio theme with warm gold/amber accents, 1dp borders, and clean sans-serif UI typography (no debug monospace walls or raw field placeholders).
+1. **Startup — Authentic MSE Welcome Window:** Launch into the MSE Welcome Window (never cold-start directly into an Untitled Set wireframe) featuring a compact header with MSE emblem (`Magic Set Editor — TCG Studio`, live synced catalog count pill, and clickable Engine Status Pill), primary actions (**New Set** 2-step visual Game → Style gallery wizard, **Open Set (`.mse-set`)**, **Open Last Set / Recent Sets** listing only real user sets), and a compact secondary tools row (**Fonts & Licenses**, **Upstream Splits**, **Bridge & Termux**).
+2. **Main Set Window — Classic 5-Tab MSE Workspace:** Compact single-row Top App Bar (Back/Welcome with unsaved-changes check, Set Title + `game • style` subtitle, real Undo/Redo history buttons, Save icon with unsaved indicator dot, Font Dropdown `TT`, clickable Bridge Status Dot, and Overflow menu) above the 5 classic MSE tabs: **Cards**, **Set Info**, **Style**, **Keywords**, and **Stats** (live Card Count, Color/Type distribution bars, and Cost/Mana curve).
+3. **Zero-Overlap 1:1 IRL `Cards` Stage:** Never stamp floating diagnostic pills or red banners over the card face. Render live Bridge PNGs when ONLINE, or the Real Upstream Base-Frame Compositor (with safe structured non-overlapping fallback when upstream frame/coordinates are unavailable) when OFFLINE. Keep card artwork strictly `null`/empty until imported, place the compact Frame Color/Variant selector + subtle status caption + slim scale/zoom bar (with active style mini thumbnail) cleanly BELOW the card, and maintain comfortable `12.dp–16.dp` horizontal padding on the bottom card navigator (`<` | `Card 1 / N` | `>` | `+ New` | Art).
+4. **Warm-Obsidian Drafting Studio Craft:** `#111318`, `#1A1E26`, `#232834` dark obsidian surfaces with antiqued MSE gold accents (`#D4A84B`), 1dp bevel borders, soft tabletop vignette behind the card, and soft `14.dp` physical card drop shadow.
+
+---
+
+## 10. DYNAMIC TEMPLATE CATALOG REPOSITORY (`MseTemplateCatalogRepository`)
+* **Zero-Rate-Limit GitHub Discovery:**
+  1. Calls `GET https://api.github.com/repos/MagicSetEditorPacks/{repo}/contents/data` (1 ETag-cached API call per repo) for `Full-Magic-Pack` (default on), `Full-Non-Magic-Pack` (default on), `Beta-Update-Pack` (opt-in toggle), and `Outdated-Templates` (opt-in toggle).
+  2. Discovers all `.mse-game`, `.mse-style`, and `.mse-include` folders.
+  3. Fetches plain-text `game` and `style` files via `https://raw.githubusercontent.com/MagicSetEditorPacks/{repo}/{branch}/data/{folder}/{game|style}` (unmetered raw CDN) with bounded coroutine concurrency (`Semaphore(10)`).
+  4. Parses `full name:`, `short name:`, `game:`, `icon:`, `card width:`, `card height:`, `card dpi:`, `position hint:`, `depends on:`, and `card style:` field blocks (`left`, `top`, `width`, `height`, `right`, `bottom`, `z index`, `choice images:`, `default:`).
+  5. Builds real MSE thumbnail URLs (`raw.githubusercontent.com/.../{icon}`) loaded via Coil with disk+memory caching.
+  6. Persists the catalog locally to JSON disk cache immediately with incremental sync progress feedback and manual Refresh Catalog action, merging local `GET /templates` when the Bridge is online.
+  7. Scans `Magic - Fonts` and `Other - Fonts` via the same 1-call `contents` endpoint so all real MSE pack fonts appear in the Searchable Font Dropdown.
+
 

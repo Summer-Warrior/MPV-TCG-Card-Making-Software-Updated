@@ -4,8 +4,10 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,16 +20,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AddBox
+import androidx.compose.material.icons.filled.AutoAwesomeMosaic
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FontDownload
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -38,6 +45,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -45,8 +54,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
-import com.example.data.bridge.BridgeTemplateDto
-import com.example.data.mse.MseStyleOption
+import com.example.data.mse.CatalogPackFilter
+import com.example.data.mse.CatalogSyncState
+import com.example.data.mse.DiscoveredGame
+import com.example.data.mse.DiscoveredStyle
 import com.example.data.mse.MseTemplateCatalog
 import com.example.data.mse.RecentSetRecord
 import com.example.ui.BridgeHealthState
@@ -54,15 +65,20 @@ import com.example.ui.components.BridgeStatusPill
 
 /**
  * Authentic Magic Set Editor Welcome Window (Startup Screen).
- * Zero clutter, zero clipping on 360dp phone widths, zero fake sample sets.
+ * Refined warm-obsidian drafting studio craft with MSE emblem, live dynamic catalog status pill,
+ * zero clutter, zero clipping on 360dp phones, and strictly real user recent sets.
  */
 @Composable
 fun WelcomeScreen(
     bridgeHealth: BridgeHealthState,
-    bridgeTemplates: List<BridgeTemplateDto>,
+    discoveredGames: List<DiscoveredGame>,
+    discoveredStyles: List<DiscoveredStyle>,
+    catalogSyncState: CatalogSyncState,
     recentSets: List<RecentSetRecord>,
+    onRefreshCatalog: () -> Unit,
+    onToggleOptInPack: (CatalogPackFilter, Boolean) -> Unit,
     onOpenBridgeSheet: () -> Unit,
-    onCreateNewSet: (title: String, gameId: String, styleOption: MseStyleOption) -> Unit,
+    onCreateNewSet: (title: String, gameId: String, styleOption: DiscoveredStyle) -> Unit,
     onOpenSetUri: (Uri) -> Unit,
     onOpenRecentSet: (RecentSetRecord) -> Unit,
     onOpenFontsManager: () -> Unit,
@@ -85,33 +101,134 @@ fun WelcomeScreen(
         contentPadding = PaddingValues(top = 16.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // ---- Top MSE Header ----
+        // ---- Top MSE Emblem Header + Engine Status Pill ----
         item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.welcome_title),
-                        style = MaterialTheme.typography.headlineMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = stringResource(R.string.welcome_subtitle),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        // Clean MSE Studio Emblem
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                                            MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        )
+                                    )
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = androidx.compose.ui.graphics.Color.Transparent,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)),
+                                modifier = Modifier.fillMaxSize(),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesomeMosaic,
+                                    contentDescription = "Magic Set Editor Emblem",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(9.dp),
+                                )
+                            }
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.welcome_title),
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = stringResource(R.string.welcome_subtitle),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+                    BridgeStatusPill(
+                        healthState = bridgeHealth,
+                        onClick = onOpenBridgeSheet,
                     )
                 }
-                Spacer(Modifier.width(10.dp))
-                BridgeStatusPill(
-                    healthState = bridgeHealth,
-                    onClick = onOpenBridgeSheet,
-                )
+
+                // ---- Live Catalog Sync Status Pill ----
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            val pillLabel = when {
+                                catalogSyncState.isSyncing ->
+                                    catalogSyncState.statusMessage.ifBlank { "Indexing Magic & Non-Magic packs…" }
+
+                                discoveredStyles.isNotEmpty() ->
+                                    "${discoveredGames.size} Games • ${discoveredStyles.size} Frames Synced"
+
+                                else -> "Tap refresh to index Magic & Non-Magic packs"
+                            }
+                            Text(
+                                text = pillLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (catalogSyncState.isSyncing) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(
+                                onClick = onRefreshCatalog,
+                                enabled = !catalogSyncState.isSyncing,
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .testTag("welcome_refresh_catalog"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Refresh template catalog",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+
+                        if (catalogSyncState.isSyncing) {
+                            LinearProgressIndicator(
+                                progress = { catalogSyncState.progressFraction.coerceIn(0.05f, 1f) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -140,13 +257,13 @@ fun WelcomeScreen(
             )
         }
 
-        // Quick "Open Last Set" action if at least one real recent set exists
+        // Quick "Open Last Set" action when at least one real recent set exists
         recentSets.firstOrNull()?.let { lastSet ->
             item {
                 WelcomeActionCard(
                     icon = Icons.Default.History,
                     title = "${stringResource(R.string.welcome_open_last)}: ${lastSet.title}",
-                    subtitle = "${MseTemplateCatalog.displayGameName(lastSet.game)} • ${lastSet.stylesheet} • ${lastSet.cardCount} card(s)",
+                    subtitle = "${MseTemplateCatalog.displayGameName(lastSet.game, discoveredGames)} • ${lastSet.stylesheet} • ${lastSet.cardCount} card(s)",
                     emphasized = false,
                     onClick = { onOpenRecentSet(lastSet) },
                     modifier = Modifier.testTag("welcome_open_last_card"),
@@ -154,9 +271,9 @@ fun WelcomeScreen(
             }
         }
 
-        // ---- Secondary Tools Row (Fonts, Upstream Splits, Bridge & Termux) ----
+        // ---- Secondary Tools Row ----
         item {
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(2.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -237,6 +354,7 @@ fun WelcomeScreen(
             items(recentSets, key = { it.id }) { record ->
                 RecentSetRow(
                     record = record,
+                    discoveredGames = discoveredGames,
                     onClick = { onOpenRecentSet(record) },
                 )
             }
@@ -245,7 +363,11 @@ fun WelcomeScreen(
 
     if (showNewSetWizard) {
         NewSetWizardDialog(
-            bridgeTemplates = bridgeTemplates,
+            games = discoveredGames,
+            styles = discoveredStyles,
+            syncState = catalogSyncState,
+            onRefreshCatalog = onRefreshCatalog,
+            onToggleOptInPack = onToggleOptInPack,
             onDismiss = { showNewSetWizard = false },
             onCreateSet = { title, gameId, styleOption ->
                 showNewSetWizard = false
@@ -377,6 +499,7 @@ private fun SecondaryToolTile(
 @Composable
 private fun RecentSetRow(
     record: RecentSetRecord,
+    discoveredGames: List<DiscoveredGame>,
     onClick: () -> Unit,
 ) {
     Surface(
@@ -403,7 +526,7 @@ private fun RecentSetRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${MseTemplateCatalog.displayGameName(record.game)} • ${record.stylesheet} • ${record.cardCount} card(s)",
+                    text = "${MseTemplateCatalog.displayGameName(record.game, discoveredGames)} • ${record.stylesheet} • ${record.cardCount} card(s)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

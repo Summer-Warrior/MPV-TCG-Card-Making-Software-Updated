@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import com.example.data.bridge.BridgeFontDto
 import com.example.data.bridge.BridgeResult
 import com.example.data.bridge.MseBridgeClient
+import com.example.data.mse.DiscoveredPackFont
 import com.example.data.settings.SettingsRepository
 import com.squareup.moshi.Moshi
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +44,7 @@ class FontCatalogRepository(
     private val bridgeInstalledFonts = MutableStateFlow<List<BridgeFontDto>>(emptyList())
     private val templateReferencedFonts = MutableStateFlow<List<String>>(emptyList())
     private val bridgeMissingFonts = MutableStateFlow<List<String>>(emptyList())
+    private val discoveredPackFonts = MutableStateFlow<List<DiscoveredPackFont>>(emptyList())
 
     private val androidSystemFonts: List<FontEntry> = listOf(
         systemFont("Roboto", "Google / Android System"),
@@ -52,16 +54,22 @@ class FontCatalogRepository(
     )
 
     val unifiedFontsFlow: Flow<List<FontEntry>> = combine(
-        bridgeInstalledFonts,
-        templateReferencedFonts,
-        bridgeMissingFonts,
+        combine(
+            bridgeInstalledFonts,
+            templateReferencedFonts,
+            bridgeMissingFonts,
+            discoveredPackFonts,
+        ) { bridgeFonts, styleFonts, missingFromBridge, packFonts ->
+            FontCatalogInput(bridgeFonts, styleFonts, missingFromBridge, packFonts)
+        },
         settingsRepository.purchasedLicensedFontsFlow,
         settingsRepository.downloadedOpenFontsFlow,
-    ) { bridgeFonts, styleFonts, missingFromBridge, licensedSet, downloadedOpenSet ->
+    ) { input, licensedSet, downloadedOpenSet ->
         buildUnifiedCatalog(
-            bridgeFonts = bridgeFonts,
-            styleFonts = styleFonts,
-            missingFromBridge = missingFromBridge,
+            bridgeFonts = input.bridgeFonts,
+            styleFonts = input.styleFonts,
+            missingFromBridge = input.missingFromBridge,
+            packFonts = input.packFonts,
             licensedSet = licensedSet,
             downloadedOpenSet = downloadedOpenSet,
         )
@@ -73,6 +81,27 @@ class FontCatalogRepository(
 
     fun updateBridgeMissingFonts(fonts: List<String>) {
         bridgeMissingFonts.value = fonts.filter { it.isNotBlank() }.distinct()
+    }
+
+    fun updateDiscoveredPackFonts(fonts: List<DiscoveredPackFont>) {
+        discoveredPackFonts.value = fonts
+    }
+
+    /**
+     * Resolves a locally cached/imported `.ttf` or `.otf` file for the requested font family
+     * so offline coordinate-mapped card text previews can apply the user's selected font.
+     */
+    fun resolveLocalFontFile(familyName: String?): File? {
+        if (familyName.isNullOrBlank()) return null
+        val targetNorm = normalizeName(familyName)
+        if (targetNorm.isEmpty()) return null
+        val files = userFontsDir.listFiles().orEmpty()
+        return files.firstOrNull { file ->
+            val lower = file.name.lowercase()
+            (lower.endsWith(".ttf") || lower.endsWith(".otf")) &&
+                (normalizeName(file.nameWithoutExtension) == targetNorm ||
+                    normalizeName(file.nameWithoutExtension).contains(targetNorm))
+        }
     }
 
     suspend fun refreshFromBridge(): BridgeResult<List<BridgeFontDto>> {
@@ -210,6 +239,7 @@ class FontCatalogRepository(
         bridgeFonts: List<BridgeFontDto>,
         styleFonts: List<String>,
         missingFromBridge: List<String>,
+        packFonts: List<DiscoveredPackFont>,
         licensedSet: Set<String>,
         downloadedOpenSet: Set<String>,
     ): List<FontEntry> {
@@ -246,7 +276,29 @@ class FontCatalogRepository(
             )
         }
 
-        // 2. Android system fonts
+        // 2. Dynamically discovered MSE Pack Fonts (`Magic - Fonts`, `Other - Fonts`)
+        for (pf in packFonts) {
+            val norm = normalizeName(pf.familyName)
+            if (!byNormalizedName.containsKey(norm)) {
+                val isReady = norm in downloadedNormalized || norm in bridgeInstalledNormalized || norm in licensedNormalized
+                byNormalizedName[norm] = FontEntry(
+                    id = "pack_${pf.packRepo.lowercase()}_$norm",
+                    familyName = pf.familyName,
+                    foundry = "MagicSetEditorPacks (${pf.fontFolder})",
+                    licenseNote = "Open MSE template pack font from ${pf.packRepo}/${pf.fontFolder}.",
+                    availability = if (isReady) {
+                        FontAvailability.INSTALLED_FREE
+                    } else {
+                        FontAvailability.DOWNLOADABLE_OPEN
+                    },
+                    sourcePack = "${pf.packRepo} • ${pf.fontFolder}",
+                    downloadUrl = pf.downloadUrl,
+                    syncedToBridge = norm in bridgeInstalledNormalized,
+                )
+            }
+        }
+
+        // 3. Android system fonts
         for (sys in androidSystemFonts) {
             val norm = normalizeName(sys.familyName)
             if (!byNormalizedName.containsKey(norm)) {
@@ -368,4 +420,11 @@ class FontCatalogRepository(
                 }
         }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/')
     }
+
+    private data class FontCatalogInput(
+        val bridgeFonts: List<BridgeFontDto>,
+        val styleFonts: List<String>,
+        val missingFromBridge: List<String>,
+        val packFonts: List<DiscoveredPackFont>,
+    )
 }

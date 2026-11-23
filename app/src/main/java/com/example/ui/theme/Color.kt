@@ -2,18 +2,18 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Dark Graphite / Slate MSE Studio Palette (Primary)
-val GraphiteBg = Color(0xFF111317)
-val GraphiteSurface = Color(0xFF181B21)
-val GraphiteSurfaceHigh = Color(0xFF20242C)
-val GraphiteSurfaceHighest = Color(0xFF2A2F3A)
-val GraphiteOutline = Color(0xFF353C49)
-val GraphiteOutlineSubtle = Color(0xFF262B35)
+// Warm-Obsidian Drafting Studio MSE Palette (Primary)
+val GraphiteBg = Color(0xFF111318)
+val GraphiteSurface = Color(0xFF1A1E26)
+val GraphiteSurfaceHigh = Color(0xFF232834)
+val GraphiteSurfaceHighest = Color(0xFF2C3240)
+val GraphiteOutline = Color(0xFF394152)
+val GraphiteOutlineSubtle = Color(0xFF282E3B)
 
-val StudioGold = Color(0xFFD9A441)
-val StudioGoldContainer = Color(0xFF3A2D15)
-val OnStudioGold = Color(0xFF1F1604)
-val OnStudioGoldContainer = Color(0xFFFBE1A8)
+val StudioGold = Color(0xFFD4A84B)
+val StudioGoldContainer = Color(0xFF3B2E16)
+val OnStudioGold = Color(0xFF1E1605)
+val OnStudioGoldContainer = Color(0xFFFBE3AE)
 
 val SlateAccent = Color(0xFF7FA6C9)
 val SlateAccentContainer = Color(0xFF1D2C3B)
