@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MPV TCG Card Making Software — Nexus Master Hub &amp; Two-Way Engine Bridge</title>
+  <style>
+    :root {
+      --bg: #0f1218;
+      --surface: #171b24;
+      --surface-hi: #202634;
+      --border: #323b4d;
+      --gold: #d4a84b;
+      --text: #eceff4;
+      --muted: #98a2b3;
+      --green: #34c77b;
+      --amber: #e5a03d;
+      --red: #e36464;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --sans: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #1b202c 0%, var(--bg) 100%);
+      padding: 20px 18px;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+    .header-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.01em; }
+    .subtitle { color: var(--gold); font-size: 0.9rem; margin-top: 2px; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .pill.healthy { border-color: var(--green); color: var(--green); }
+    .pill.degraded { border-color: var(--amber); color: var(--amber); }
+    .pill.breaking { border-color: var(--red); color: var(--red); }
+    main { padding: 20px 0 48px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 1.05rem;
+      color: var(--gold);
+    }
+    .muted { color: var(--muted); font-size: 0.86rem; }
+    .mono { font-family: var(--mono); font-size: 0.82rem; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    button, .btn-link {
+      background: var(--surface-hi);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    button.primary {
+      background: var(--gold);
+      color: #1a1305;
+      border-color: var(--gold);
+    }
+    button.danger {
+      background: rgba(227, 100, 100, 0.16);
+      color: var(--red);
+      border-color: var(--red);
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    input, select, textarea {
+      width: 100%;
+      background: #10141c;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.88rem;
+      margin-top: 4px;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-top: 8px; }
+    .pip-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .pip-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      background: #121620;
+      border: 1px solid var(--border);
+    }
+    .pip-btn.active { border-color: var(--gold); background: rgba(212, 168, 75, 0.18); }
+    .diamond {
+      width: 12px;
+      height: 12px;
+      transform: rotate(45deg);
+      border: 1.5px solid rgba(255,255,255,0.65);
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .sacred-svg { width: 16px; height: 16px; flex-shrink: 0; }
+    .audit-item {
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      margin-top: 6px;
+      font-size: 0.84rem;
+    }
+    .audit-item.fail { border-color: var(--red); color: #ffdada; background: rgba(227,100,100,0.12); }
+    .audit-item.pass { border-color: var(--green); color: #bcf5d6; background: rgba(52,199,123,0.10); }
+    pre {
+      background: #0b0e14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      max-height: 240px;
+    }
+    /* High-priority Admin-Only Blocking Alert Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(5, 7, 12, 0.84);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 999;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      max-width: 620px;
+      width: 100%;
+      background: #191418;
+      border: 2px solid var(--red);
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+    }
+    .modal h2 { margin: 0 0 8px; color: var(--red); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap header-row">
+      <div>
+        <h1>MPV TCG Card Making Software</h1>
+        <div class="subtitle">Master Hub Sync • Two-Way Engine Handshake • Card Frame Reviewer (Zero-Build)</div>
+      </div>
+      <div id="health-pill" class="pill healthy">Health: Checking…</div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="grid">
+      <!-- Two-Way Handshake & Dual-Engine Consent -->
+      <section class="card">
+        <h2>Two-Way Engine Handshake &amp; Dual Consent</h2>
+        <div id="handshake-summary" class="muted">Loading handshake-contract.json…</div>
+        <div id="consent-badges" class="btn-row"></div>
+        <div class="btn-row">
+          <button id="btn-live-sync" class="primary" type="button">Sync Live Tcg-game-engine-test</button>
+          <button id="btn-export-health" type="button">Download Health Status JSON</button>
+        </div>
+        <div id="sync-log" class="muted mono" style="margin-top:8px;"></div>
+      </section>
+
+      <!-- Live Engine Snapshot & Variants -->
+      <section class="card">
+        <h2>Live Engine Snapshot &amp; Non-Locked Variants</h2>
+        <div id="engine-meta" class="muted">Loading engine-sync-snapshot.json…</div>
+        <div id="variants-list" style="margin-top:8px;"></div>
+      </section>
+
+      <!-- Master Hub Admin Gate & Alert Relays -->
+      <section class="card">
+        <h2>Master Hub Admin Gate &amp; Tri-Channel Alerts</h2>
+        <p class="muted">
+          Blocking compatibility pop-ups appear ONLY for users matching Master Hub Admin Roles/IDs/Emails.
+          No Discord Bot Tokens are ever requested or stored here.
+        </p>
+        <label>Your Admin Role ID / User ID / Email (local gate check)
+          <input id="admin-identity" type="text" placeholder="role_id, user_id, or admin@domain" />
+        </label>
+        <label>Optional Discord Admin Alert Webhook URL (session-only)
+          <input id="discord-webhook" type="password" placeholder="https://discord.com/api/webhooks/..." />
+        </label>
+        <label>Optional Admin Email Relay Webhook URL (session-only)
+          <input id="email-relay" type="password" placeholder="https://your-relay.example/email" />
+        </label>
+        <div class="btn-row">
+          <button id="btn-save-admin" type="button">Apply Admin Gate Identity</button>
+          <a id="btn-mailto" class="btn-link" href="mailto:?subject=TCG%20Engine%20Compatibility%20Report">Mailto Escalation</a>
+        </div>
+      </section>
+    </div>
+
+    <!-- Card Frame Reviewer & 20-Color Pie + {C} WIP Spec Audit -->
+    <section class="card">
+      <h2>Card Frame Reviewer &amp; 20-Color Pie WIP Spec Auditor</h2>
+      <div class="grid">
+        <div>
+          <label>Target Non-Locked Base Variant
+            <select id="review-variant"></select>
+          </label>
+          <label>Card Name
+            <input id="review-name" type="text" placeholder="Enter card name" />
+          </label>
+          <label>21-Digit Code String (^[0-9]{1,21}$)
+            <input id="review-code" type="text" placeholder="e.g. 123456789012345678901" />
+          </label>
+          <label>Rules / Effect Text (Delimiters like '|' are auto-checked)
+            <textarea id="review-rules" rows="3" placeholder="Enter card rules text"></textarea>
+          </label>
+          <label>Editor Mode (Time-Travel Rule)
+            <select id="review-mode">
+              <option value="MATCH_GAMEPLAY">Match Gameplay Card (Filters 19-21 Blocked)</option>
+              <option value="AVATAR_PROFILE_MEMORIAL_DOSSIER">Avatar Profile / Memorial Forge Dossier (Filters 19-21 Allowed)</option>
+            </select>
+          </label>
+        </div>
+
+        <div>
+          <label>Filter Pips (leave empty to display ALL canonical pips)
+            <input id="pip-filter" type="text" placeholder="Filter by code or name…" />
+          </label>
+          <div class="muted" style="margin-top:6px;">
+            Selected Pips (loads with ZERO defaults): <span id="selected-pips-text" class="mono">None</span>
+            <button id="btn-clear-pips" type="button" style="margin-left:8px;padding:3px 8px;">Clear</button>
+          </div>
+          <div class="muted" style="margin-top:8px;">Layers 1–19: Diamond Option B Pips (Pure, :T, :S, :M, Splits, Crowned Leads)</div>
+          <div id="diamond-pip-grid" class="pip-grid"></div>
+          <div class="muted" style="margin-top:10px;">Layer 20 Omnichroma {Ω}: 6 Bespoke Sacred Celestial Geometries</div>
+          <div id="omega-pip-grid" class="pip-grid"></div>
+        </div>
+      </div>
+
+      <div id="audit-results" style="margin-top:12px;"></div>
+      <div class="btn-row">
+        <button id="btn-copy-script" class="primary" type="button">Copy Generated Script</button>
+      </div>
+      <pre id="script-preview"></pre>
+    </section>
+  </main>
+
+  <!-- High-Priority Admin-Only Blocking Breaking-Change Alert Modal -->
+  <div id="admin-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
+    <div class="modal">
+      <h2 id="admin-modal-title">Admin Alert: Engine Compatibility Break Detected</h2>
+      <p id="admin-modal-body" class="muted"></p>
+      <pre id="admin-modal-details"></pre>
+      <div class="btn-row">
+        <button id="btn-pause-sync" class="danger" type="button">Pause Sync</button>
+        <button id="btn-export-diag" class="primary" type="button">Export Diagnostic Report</button>
+        <button id="btn-fire-discord" type="button">Send Discord Admin Alert</button>
+        <button id="btn-close-modal" type="button">Dismiss</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const GITHUB_API_VERSION = "2026-03-10";
+      const BASE_20_COLORS = [
+        { code: "{C}", name: "Colorless", hex: "#9ea7b8" },
+        { code: "{W}", name: "White", hex: "#f5f2e6" },
+        { code: "{U}", name: "Blue", hex: "#3b82f6" },
+        { code: "{B}", name: "Black", hex: "#2d2838" },
+        { code: "{R}", name: "Red", hex: "#e14c4c" },
+        { code: "{G}", name: "Green", hex: "#2ea865" },
+        { code: "{P}", name: "Purple", hex: "#8e55d9" },
+        { code: "{Y}", name: "Yellow", hex: "#ecc94b" },
+        { code: "{O}", name: "Orange", hex: "#ea8434" },
+        { code: "{Cy}", name: "Cyan", hex: "#22c7d6" },
+        { code: "{Pk}", name: "Pink", hex: "#ec6ea8" },
+        { code: "{Br}", name: "Brown", hex: "#8d5d3b" },
+        { code: "{Te}", name: "Teal", hex: "#1f9d8b" },
+        { code: "{In}", name: "Indigo", hex: "#4f5bd5" },
+        { code: "{Mg}", name: "Magenta", hex: "#d63384" },
+        { code: "{Li}", name: "Lime", hex: "#84cc16" },
+        { code: "{Sl}", name: "Silver", hex: "#cbd5e1" },
+        { code: "{Gd}", name: "Gold", hex: "#d4a84b" },
+        { code: "{Cr}", name: "Crimson", hex: "#b91c1c" },
+        { code: "{Ob}", name: "Obsidian", hex: "#181a24" },
+        { code: "{Aq}", name: "Aqua", hex: "#38bdf8" }
+      ];
+
+      // Layer 20 Omnichroma {Omega}: 6 bespoke sacred celestial geometries (breaks free from Diamonds)
+      const LAYER_20_SACRED = [
+        { code: "{Ω·M}", name: "Hexagram Star", path: "M12 2 L15 9 L22 9 L16 14 L18 21 L12 17 L6 21 L8 14 L2 9 L9 9 Z" },
+        { code: "{Ω·C}", name: "Celestial Octagram", path: "M12 2 L14.5 7.5 L20 5 L17.5 10.5 L22 12 L17.5 13.5 L20 19 L14.5 16.5 L12 22 L9.5 16.5 L4 19 L6.5 13.5 L2 12 L6.5 10.5 L4 5 L9.5 7.5 Z" },
+        { code: "{Ω·S}", name: "Sacred Halo Ring", path: "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 M12 7 A5 5 0 1 1 12 17 A5 5 0 1 1 12 7" },
+        { code: "{Ω·V}", name: "Astral Merkaba", path: "M12 2 L21 17 L3 17 Z M12 22 L3 7 L21 7 Z" },
+        { code: "{Ω·E}", name: "Primordial Sunburst", path: "M12 2 L13.5 8.5 L20 5 L15.5 10.5 L22 12 L15.5 13.5 L20 19 L13.5 15.5 L12 22 L10.5 15.5 L4 19 L8.5 13.5 L2 12 L8.5 10.5 L4 5 L10.5 8.5 Z" },
+        { code: "{Ω·A}", name: "Solar Astrolabe", path: "M12 2 L12 22 M2 12 L22 12 M5 5 L19 19 M19 5 L5 19 M12 6 A6 6 0 1 0 12 18 A6 6 0 1 0 12 6" }
+      ];
+
+      const state = {
+        appManifest: null,
+        repoLink: null,
+        contract: null,
+        snapshot: null,
+        health: null,
+        selectedPips: [], // STRICTLY ZERO default colors selected
+        paused: false,
+        alertedShas: new Set(JSON.parse(localStorage.getItem("mpv_alerted_shas") || "[]"))
+      };
+
+      const el = (id) => document.getElementById(id);
+
+      async function fetchLocalJson(path) {
+        try {
+          const resp = await fetch(path, { cache: "no-store" });
+          if (!resp.ok) return null;
+          return await resp.json();
+        } catch (_err) {
+          return null;
+        }
+      }
+
+      function renderHealthBadge() {
+        const pill = el("health-pill");
+        const sev = state.health?.severity || "HEALTHY";
+        pill.textContent = "Health: " + sev + (state.paused ? " (PAUSED)" : "");
+        pill.className = "pill " + (sev === "BREAKING_INCOMPATIBLE" ? "breaking" : sev === "DEGRADED" ? "degraded" : "healthy");
+      }
+
+      function renderHandshake() {
+        const c = state.contract;
+        if (!c) {
+          el("handshake-summary").textContent = "Unable to load handshake-contract.json";
+          return;
+        }
+        const bothConsented =
+          c.cardMakerConsent?.status === "CONSENTED" &&
+          c.gameEngineConsent?.status === "CONSENTED" &&
+          c.cardMakerConsent?.commitSha === c.gameEngineConsent?.commitSha &&
+          Boolean(c.cardMakerConsent?.commitSha);
+
+        el("handshake-summary").textContent =
+          "Contract v" + c.contractVersion + " • " + c.cardMakerRepo + " <-> " + c.gameEngineRepo +
+          " • Gate: " + (bothConsented ? "FINALIZED (BOTH CONSENTED)" : "STAGED PREVIEW (Awaiting Dual Consent)");
+
+        const badges = el("consent-badges");
+        badges.replaceChildren();
+        [
+          ["Card Maker: " + (c.cardMakerConsent?.status || "PENDING")],
+          ["Game Engine: " + (c.gameEngineConsent?.status || "PENDING")],
+          ["Master Hub Ack: " + (state.health?.masterHubAckStatus || "NOT_REQUIRED")]
+        ].forEach(([label]) => {
+          const span = document.createElement("span");
+          span.className = "pill";
+          span.textContent = label;
+          badges.appendChild(span);
+        });
+      }
+
+      function renderSnapshot() {
+        const s = state.snapshot;
+        if (!s) return;
+        el("engine-meta").textContent =
+          s.engineRepo + "@" + s.engineBranch + " (" + s.commitSha.slice(0, 12) + ") • BigInt21 max " +
+          (s.bigInt21Spec?.maxDigits || 21) + " digits • Reserved delimiter: '|'";
+
+        const list = el("variants-list");
+        const select = el("review-variant");
+        list.replaceChildren();
+        select.replaceChildren();
+
+        (s.baseVariants || []).forEach((v) => {
+          const div = document.createElement("div");
+          div.className = "audit-item pass";
+          div.textContent = v.baseVariantId + " (" + v.scriptType + ") — Zones: " + (v.zones || []).join(", ");
+          list.appendChild(div);
+
+          const opt = document.createElement("option");
+          opt.value = v.baseVariantId;
+          opt.textContent = v.displayName + " [" + v.baseVariantId + "]";
+          select.appendChild(opt);
+        });
+        runFrameAudit();
+      }
+
+      function renderPipPickers() {
+        const query = (el("pip-filter").value || "").trim().toLowerCase();
+        const diamondGrid = el("diamond-pip-grid");
+        const omegaGrid = el("omega-pip-grid");
+        diamondGrid.replaceChildren();
+        omegaGrid.replaceChildren();
+
+        BASE_20_COLORS.filter((p) => !query || p.code.toLowerCase().includes(query) || p.name.toLowerCase().includes(query))
+          .forEach((p) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "pip-btn" + (state.selectedPips.includes(p.code) ? " active" : "");
+            const diamond = document.createElement("span");
+            diamond.className = "diamond";
+            diamond.style.background = p.hex;
+            const txt = document.createElement("span");
+            txt.textContent = p.code + " " + p.name;
+            btn.append(diamond, txt);
+            btn.addEventListener("click", () => {
+              state.selectedPips.push(p.code);
+              updateSelectedPips();
+            });
+            diamondGrid.appendChild(btn);
+          });
+
+        LAYER_20_SACRED.filter((p) => !query || p.code.toLowerCase().includes(query) || p.name.toLowerCase().includes(query))
+          .forEach((p) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "pip-btn" + (state.selectedPips.includes(p.code) ? " active" : "");
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.setAttribute("viewBox", "0 0 24 24");
+            svg.setAttribute("class", "sacred-svg");
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", p.path);
+            path.setAttribute("fill", "none");
+            path.setAttribute("stroke", "#d4a84b");
+            path.setAttribute("stroke-width", "1.6");
+            svg.appendChild(path);
+            const txt = document.createElement("span");
+            txt.textContent = p.code + " " + p.name;
+            btn.append(svg, txt);
+            btn.addEventListener("click", () => {
+              state.selectedPips.push(p.code);
+              updateSelectedPips();
+            });
+            omegaGrid.appendChild(btn);
+          });
+      }
+
+      function updateSelectedPips() {
+        el("selected-pips-text").textContent = state.selectedPips.length ? state.selectedPips.join(" ") : "None";
+        renderPipPickers();
+        runFrameAudit();
+      }
+
+      function sanitizeDescriptor(text) {
+        return String(text || "").replace(/\|/g, "/").replace(/\s+/g, " ").trim();
+      }
+
+      function runFrameAudit() {
+        const snap = state.snapshot;
+        const name = el("review-name").value.trim();
+        const code = el("review-code").value.trim();
+        const rules = el("review-rules").value;
+        const mode = el("review-mode").value;
+        const variantId = el("review-variant").value || "EDOPRO_CUSTOM_FORK";
+        const bounds = snap?.firestoreBounds || { maxCardNameLength: 120, maxRulesTextLength: 2000, maxCodeStringLength: 21 };
+
+        const issues = [];
+        if (!name) issues.push("Card name is empty.");
+        if (name.length > bounds.maxCardNameLength) issues.push("Card name exceeds Firestore bound (" + bounds.maxCardNameLength + ").");
+        if (rules.length > bounds.maxRulesTextLength) issues.push("Rules text exceeds Firestore bound (" + bounds.maxRulesTextLength + ").");
+        if (name.includes("|") || rules.includes("|")) issues.push("Reserved delimiter '|' detected — will be sanitized in board descriptor.");
+        if (code && !/^[0-9]{1,21}$/.test(code)) issues.push("Code string must match ^[0-9]{1,21}$ (BigInt21Engine).");
+        if (/.*[0-9]{22}.*/.test(rules)) issues.push("22+ consecutive digits detected in rules text.");
+        if (mode === "MATCH_GAMEPLAY" && /time[\s-]?travel|filter\s*(19|20|21)/i.test(rules)) {
+          issues.push("Match Gameplay card violates Time-Travel Client Rule (Filters 19-21 blocked).");
+        }
+
+        const out = el("audit-results");
+        out.replaceChildren();
+        if (issues.length === 0) {
+          const ok = document.createElement("div");
+          ok.className = "audit-item pass";
+          ok.textContent = "Card Frame Review PASSED against live snapshot (" + variantId + ") and WIP 20-Color Pie Spec.";
+          out.appendChild(ok);
+        } else {
+          issues.forEach((msg) => {
+            const div = document.createElement("div");
+            div.className = "audit-item fail";
+            div.textContent = "• " + msg;
+            out.appendChild(div);
+          });
+        }
+
+        const safeDesc = [variantId, code || "0", sanitizeDescriptor(name), state.selectedPips.join("")].join("|");
+        const padded = (code || "0").padStart(21, "0");
+        const script = variantId === "FORGE_CUSTOM_CLONE"
+          ? "Name:" + sanitizeDescriptor(name) + "\nSVar:CodeString21:" + (code || "0") + "\nSVar:ColorPie:" + state.selectedPips.join("") + "\n# SafeDescriptor: " + safeDesc
+          : "-- File: c" + padded + ".lua (" + variantId + ")\nlocal c = { id = \"" + (code || "0") + "\", pips = \"" + state.selectedPips.join("") + "\" }\n-- SafeDescriptor: " + safeDesc + "\nreturn c";
+        el("script-preview").textContent = script;
+      }
+
+      function matchesAdminGate() {
+        const id = (el("admin-identity").value || "").trim().toLowerCase();
+        if (!id) return false;
+        const gate = state.appManifest?.masterHubAdminGate || {};
+        const pool = [...(gate.adminRoleIds || []), ...(gate.adminUserIds || []), ...(gate.adminEmails || [])].map((x) => String(x).toLowerCase());
+        return pool.length === 0 ? id.includes("admin") : pool.includes(id);
+      }
+
+      function maybeShowAdminModal() {
+        const h = state.health;
+        if (!h || (h.severity !== "DEGRADED" && h.severity !== "BREAKING_INCOMPATIBLE")) return;
+        if (!matchesAdminGate()) return;
+        if (h.failingCommitSha && state.alertedShas.has(h.failingCommitSha)) return;
+
+        el("admin-modal-body").textContent =
+          "Severity: " + h.severity + " • Engine Commit: " + (h.failingCommitSha || "unknown") +
+          " • Master Hub Ack: " + h.masterHubAckStatus;
+        el("admin-modal-details").textContent = JSON.stringify(h, null, 2);
+        el("admin-modal").classList.add("open");
+
+        if (h.failingCommitSha) {
+          state.alertedShas.add(h.failingCommitSha);
+          localStorage.setItem("mpv_alerted_shas", JSON.stringify([...state.alertedShas]));
+        }
+      }
+
+      function updateMailtoHref() {
+        const h = state.health || {};
+        const subject = encodeURIComponent("[" + (h.severity || "STATUS") + "] MPV <-> Tcg-game-engine-test Compatibility Report");
+        const body = encodeURIComponent(JSON.stringify(h, null, 2));
+        el("btn-mailto").href = "mailto:?subject=" + subject + "&body=" + body;
+      }
+
+      async function syncLiveEngine() {
+        if (state.paused) {
+          el("sync-log").textContent = "Sync paused by Administrator.";
+          return;
+        }
+        const repo = state.repoLink?.linkedGameEngineRepo || "Summer-Warrior/Tcg-game-engine-test";
+        const branch = state.repoLink?.linkedGameEngineBranch || "main";
+        const url = "https://api.github.com/repos/" + repo + "/branches/" + branch;
+        const etagKey = "etag_" + repo;
+        const headers = {
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": GITHUB_API_VERSION
+        };
+        const savedEtag = localStorage.getItem(etagKey);
+        if (savedEtag) headers["If-None-Match"] = savedEtag;
+
+        el("sync-log").textContent = "Fetching live commit SHA from " + repo + "…";
+        try {
+          const resp = await fetch(url, { headers });
+          if (resp.status === 304) {
+            el("sync-log").textContent = "ETag 304 Not Modified — cached snapshot is up to date.";
+            return;
+          }
+          if (!resp.ok) {
+            el("sync-log").textContent = "GitHub HTTP " + resp.status + " — fell back to cached snapshot.";
+            return;
+          }
+          const etag = resp.headers.get("ETag");
+          if (etag) localStorage.setItem(etagKey, etag);
+          const data = await resp.json();
+          const sha = data?.commit?.sha || "";
+          el("sync-log").textContent = "Live head commit on " + repo + ": " + sha.slice(0, 12) + " (STAGED until both engines consent).";
+        } catch (err) {
+          el("sync-log").textContent = "Offline fallback active (" + String(err) + ").";
+        }
+      }
+
+      function downloadJson(filename, obj) {
+        const blob = new Blob([JSON.stringify(obj, null, 2) + "\n"], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      async function boot() {
+        const [appM, repoL, contract, snapshot, health] = await Promise.all([
+          fetchLocalJson("../nexus-app.json"),
+          fetchLocalJson("../nexus-repo-link.json"),
+          fetchLocalJson("../handshake-contract.json"),
+          fetchLocalJson("../engine-sync-snapshot.json"),
+          fetchLocalJson("./engine-health-status.json")
+        ]);
+        state.appManifest = appM;
+        state.repoLink = repoL;
+        state.contract = contract;
+        state.snapshot = snapshot;
+        state.health = health;
+
+        renderHealthBadge();
+        renderHandshake();
+        renderSnapshot();
+        renderPipPickers();
+        updateMailtoHref();
+        maybeShowAdminModal();
+      }
+
+      el("btn-live-sync").addEventListener("click", syncLiveEngine);
+      el("btn-export-health").addEventListener("click", () => downloadJson("engine-health-status.json", state.health || {}));
+      el("btn-clear-pips").addEventListener("click", () => { state.selectedPips = []; updateSelectedPips(); });
+      el("pip-filter").addEventListener("input", renderPipPickers);
+      ["review-variant", "review-name", "review-code", "review-rules", "review-mode"].forEach((id) => {
+        el(id).addEventListener("input", runFrameAudit);
+        el(id).addEventListener("change", runFrameAudit);
+      });
+      el("btn-copy-script").addEventListener("click", () => {
+        navigator.clipboard?.writeText(el("script-preview").textContent || "");
+      });
+      el("btn-save-admin").addEventListener("click", () => {
+        maybeShowAdminModal();
+      });
+      el("btn-pause-sync").addEventListener("click", () => {
+        state.paused = true;
+        renderHealthBadge();
+        el("admin-modal").classList.remove("open");
+      });
+      el("btn-export-diag").addEventListener("click", () => {
+        downloadJson("engine-diagnostic-report.json", {
+          health: state.health,
+          contract: state.contract,
+          snapshot: state.snapshot
+        });
+      });
+      el("btn-fire-discord").addEventListener("click", async () => {
+        const hook = (el("discord-webhook").value || "").trim();
+        if (!hook) return;
+        await fetch(hook, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: "Engine Compatibility Alert: " + (state.health?.severity || "DEGRADED") +
+              " (" + (state.health?.failingCommitSha || "unknown") + ")"
+          })
+        });
+      });
+      el("btn-close-modal").addEventListener("click", () => el("admin-modal").classList.remove("open"));
+
+      boot();
+    })();
+  </script>
+</body>
+</html>

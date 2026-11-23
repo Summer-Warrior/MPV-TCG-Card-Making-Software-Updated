@@ -1,0 +1,35 @@
+{
+  "contractVersion": "1.0.0",
+  "expectedProtocolHash": "sha256:tcg-dual-engine-handshake-v1",
+  "cardMakerRepo": "Summer-Warrior/MPV-TCG-Card-Making-Software-Updated",
+  "gameEngineRepo": "Summer-Warrior/Tcg-game-engine-test",
+  "masterHubRepo": "Summer-Warrior/Nexus-Master-Hub",
+  "requiredEngineFiles": [
+    "firebase-blueprint.json",
+    "firestore.rules",
+    "app/src/main/java/com/example/data/Models.kt",
+    "app/src/main/java/com/example/data/GameEngine.kt",
+    "metadata.json",
+    "client-codestring-index.json"
+  ],
+  "requiredCapabilities": [
+    "21_DIGIT_BIGINT_CODES",
+    "NON_LOCKED_CUSTOM_CLONES",
+    "CARD_FRAME_DESCRIPTOR_MAPPING",
+    "TURN_PHASE_AND_EFFECT_ENUMS",
+    "20_COLOR_PIE_PIP_GRAMMAR"
+  ],
+  "dualConsentRule": "NO_SCHEMA_SYNC_OR_EXPORT_MIGRATION_WITHOUT_BOTH_CONSENTED",
+  "cardMakerConsent": {
+    "status": "PENDING",
+    "commitSha": "",
+    "approvedBy": "",
+    "timestamp": ""
+  },
+  "gameEngineConsent": {
+    "status": "PENDING",
+    "commitSha": "",
+    "approvedBy": "",
+    "timestamp": ""
+  }
+}

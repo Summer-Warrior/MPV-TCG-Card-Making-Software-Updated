@@ -3,7 +3,15 @@
   "thisBranch": "main",
   "linkedHubRepo": "Summer-Warrior/Nexus-Master-Hub",
   "linkedHubBranch": "main",
-  "bridgeSchemaVersion": "1.0.0",
+  "linkedGameEngineRepo": "Summer-Warrior/Tcg-game-engine-test",
+  "linkedGameEngineBranch": "main",
+  "linkedGameEngineUrl": "https://github.com/Summer-Warrior/Tcg-game-engine-test",
+  "bridgeSchemaVersion": "1.1.0",
   "hubIndexPath": "nexus-bridge/client-codestring-index.json",
-  "exportedPacksDir": "nexus-bridge/card-packs/"
+  "exportedPacksDir": "nexus-bridge/card-packs/",
+  "handshakeContractPath": "handshake-contract.json",
+  "engineSnapshotPath": "engine-sync-snapshot.json",
+  "healthStatusPath": "docs/engine-health-status.json",
+  "upstreamSourceLock": false,
+  "exportPolicy": "NON_LOCKED_CLIENTS_ONLY"
 }

@@ -30,9 +30,13 @@ class MainActivity : ComponentActivity() {
             val nexusHubViewModel: NexusHubViewModel = viewModel(
                 factory = NexusHubViewModel.factory(container),
             )
+            val engineSyncViewModel: com.example.ui.nexus.EngineSyncViewModel = viewModel(
+                factory = com.example.ui.nexus.EngineSyncViewModel.factory(container),
+            )
             TcgStudioApp(
                 viewModel = studioViewModel,
                 nexusHubViewModel = nexusHubViewModel,
+                engineSyncViewModel = engineSyncViewModel,
                 pendingHubSyncHandshake = pendingHubSyncHandshake,
                 onHubSyncHandshakeConsumed = { pendingHubSyncHandshake = false },
             )

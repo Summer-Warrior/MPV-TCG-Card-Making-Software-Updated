@@ -44,9 +44,15 @@ data class NexusRepoLinkManifest(
     @Json(name = "thisBranch") val thisBranch: String = "main",
     @Json(name = "linkedHubRepo") val linkedHubRepo: String = "Summer-Warrior/Nexus-Master-Hub",
     @Json(name = "linkedHubBranch") val linkedHubBranch: String = "main",
-    @Json(name = "bridgeSchemaVersion") val bridgeSchemaVersion: String = "1.0.0",
+    @Json(name = "linkedGameEngineRepo") val linkedGameEngineRepo: String = "Summer-Warrior/Tcg-game-engine-test",
+    @Json(name = "linkedGameEngineBranch") val linkedGameEngineBranch: String = "main",
+    @Json(name = "linkedGameEngineUrl") val linkedGameEngineUrl: String = "https://github.com/Summer-Warrior/Tcg-game-engine-test",
+    @Json(name = "bridgeSchemaVersion") val bridgeSchemaVersion: String = "1.1.0",
     @Json(name = "hubIndexPath") val hubIndexPath: String = "nexus-bridge/client-codestring-index.json",
     @Json(name = "exportedPacksDir") val exportedPacksDir: String = "nexus-bridge/card-packs/",
+    @Json(name = "handshakeContractPath") val handshakeContractPath: String = "handshake-contract.json",
+    @Json(name = "engineSnapshotPath") val engineSnapshotPath: String = "engine-sync-snapshot.json",
+    @Json(name = "healthStatusPath") val healthStatusPath: String = "docs/engine-health-status.json",
 )
 
 @JsonClass(generateAdapter = true)

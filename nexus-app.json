@@ -1,0 +1,22 @@
+{
+  "repo": "Summer-Warrior/MPV-TCG-Card-Making-Software-Updated",
+  "displayName": "MPV TCG Card Making Software",
+  "category": "TCG_TOOL",
+  "launchType": "ANDROID_APK_AND_WEB",
+  "webUrl": "https://summer-warrior.github.io/MPV-TCG-Card-Making-Software-Updated/",
+  "upstreamSourceLock": false,
+  "linkedMasterHub": "Summer-Warrior/Nexus-Master-Hub",
+  "linkedGameEngineRepo": "Summer-Warrior/Tcg-game-engine-test",
+  "requiredDiscordLock": {
+    "mode": "DISCORD_SIGNED_IN",
+    "guildId": "",
+    "allowedRoleIds": [],
+    "allowedUserIds": []
+  },
+  "masterHubAdminGate": {
+    "adminRoleIds": [],
+    "adminUserIds": [],
+    "adminEmails": [],
+    "inheritFromMasterHubManifest": true
+  }
+}

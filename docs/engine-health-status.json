@@ -1,0 +1,12 @@
+{
+  "alertId": "baseline-healthy-00000000",
+  "sourceRepo": "Summer-Warrior/MPV-TCG-Card-Making-Software-Updated",
+  "targetEngineRepo": "Summer-Warrior/Tcg-game-engine-test",
+  "failingCommitSha": "",
+  "severity": "HEALTHY",
+  "brokenCapabilities": [],
+  "affectedCardFrames": [],
+  "masterHubAckStatus": "NOT_REQUIRED",
+  "timestamp": "2026-11-23T00:00:00Z",
+  "signatureSha256": "baseline-unsigned"
+}

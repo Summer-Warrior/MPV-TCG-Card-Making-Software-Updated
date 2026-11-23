@@ -1,0 +1,166 @@
+{
+  "schemaVersion": "1.0.0",
+  "engineRepo": "Summer-Warrior/Tcg-game-engine-test",
+  "engineBranch": "main",
+  "commitSha": "baseline-seed",
+  "capturedAt": "2026-11-23T00:00:00Z",
+  "baseVariants": [
+    {
+      "baseVariantId": "EDOPRO_CUSTOM_FORK",
+      "displayName": "EDOPro Custom 21-Digit Fork",
+      "upstreamSourceLock": false,
+      "zones": [
+        "Main Deck",
+        "Extra Deck",
+        "Monster Zone",
+        "Spell/Trap Zone",
+        "Field Zone",
+        "Graveyard",
+        "Banished"
+      ],
+      "phases": [
+        "DRAW",
+        "STANDBY",
+        "MAIN_1",
+        "BATTLE",
+        "MAIN_2",
+        "END"
+      ],
+      "resourceLabels": [
+        "LP",
+        "Counters",
+        "Register-21"
+      ],
+      "scriptType": "LUA_21"
+    },
+    {
+      "baseVariantId": "FORGE_CUSTOM_CLONE",
+      "displayName": "Forge Custom Planar Clone",
+      "upstreamSourceLock": false,
+      "zones": [
+        "Library",
+        "Hand",
+        "Battlefield",
+        "Stack",
+        "Graveyard",
+        "Exile",
+        "Command"
+      ],
+      "phases": [
+        "UNTAP",
+        "UPKEEP",
+        "DRAW",
+        "MAIN_1",
+        "COMBAT",
+        "MAIN_2",
+        "END"
+      ],
+      "resourceLabels": [
+        "20-Color Mana",
+        "Life",
+        "Energy"
+      ],
+      "scriptType": "FORGE_SVAR"
+    },
+    {
+      "baseVariantId": "HYBRID_FORGE_EDOPRO_MIX",
+      "displayName": "Hybrid Forge x EDOPro Mix",
+      "upstreamSourceLock": false,
+      "zones": [
+        "Main Deck",
+        "Sub-Deck",
+        "Battlefield",
+        "Monster/Spell Zone",
+        "Stack",
+        "Graveyard",
+        "Exile"
+      ],
+      "phases": [
+        "UNTAP",
+        "DRAW",
+        "STANDBY",
+        "MAIN_1",
+        "BATTLE",
+        "MAIN_2",
+        "END"
+      ],
+      "resourceLabels": [
+        "LP / Life",
+        "20-Color Pie",
+        "Register-21"
+      ],
+      "scriptType": "HYBRID_LUA_SVAR"
+    }
+  ],
+  "bigInt21Spec": {
+    "maxDigits": 21,
+    "codeRegex": "^[0-9]{1,21}$",
+    "forbiddenOverflowRegex": ".*[0-9]{22}.*",
+    "supportedFunctions": [
+      "ADD_21",
+      "MUL_21",
+      "SUB_21",
+      "MOD_21",
+      "SCALE_ATK_LP_21"
+    ]
+  },
+  "firestoreBounds": {
+    "maxCardNameLength": 120,
+    "maxCardTypeLength": 120,
+    "maxRulesTextLength": 2000,
+    "maxDeckSize": 100,
+    "maxZonePlacements": 60,
+    "maxCodeStringLength": 21,
+    "reservedDelimiters": [
+      "|"
+    ]
+  },
+  "schemaDefinitions": {
+    "cardTemplateFields": [
+      "id",
+      "codeString",
+      "name",
+      "cardType",
+      "rulesText",
+      "attack",
+      "defense",
+      "costPips",
+      "effectType",
+      "baseVariantId"
+    ],
+    "customDeckFields": [
+      "deckId",
+      "name",
+      "baseVariantId",
+      "cardIds",
+      "subDeckIds"
+    ],
+    "serializedZonePlacementFields": [
+      "zoneId",
+      "slotIndex",
+      "cardId",
+      "orientation",
+      "descriptor"
+    ],
+    "turnPhases": [
+      "UNTAP",
+      "UPKEEP",
+      "DRAW",
+      "STANDBY",
+      "MAIN_1",
+      "COMBAT",
+      "BATTLE",
+      "MAIN_2",
+      "END"
+    ],
+    "cardEffectTypes": [
+      "ACTIVATED",
+      "TRIGGERED",
+      "CONTINUOUS",
+      "QUICK",
+      "END_TURN",
+      "EXTRA_TURN",
+      "STAT_MODIFIER_21"
+    ]
+  }
+}

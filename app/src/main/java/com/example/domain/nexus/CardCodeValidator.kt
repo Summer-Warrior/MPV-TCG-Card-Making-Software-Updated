@@ -77,7 +77,7 @@ object CardCodeValidator {
             "|\\{$ATOM_PATTERN·$ATOM_PATTERN\\}" +
             "|\\{$ATOM_PATTERN/$ATOM_PATTERN\\}" +
             "|\\{[2-9]$ATOM_PATTERN/$ATOM_PATTERN\\}" +
-            "|\\{Ω·[MCSVE]\\}" +
+            "|\\{Ω·[MCSVEA]\\}" +
             ")$"
     )
 

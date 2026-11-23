@@ -1,0 +1,349 @@
+name: Engine Compatibility Watchdog & Master Hub Notification Handshake
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_notify:
+        description: "Force notification even if commit SHA was already alerted"
+        required: false
+        default: "false"
+  schedule:
+    - cron: "0 */6 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - "handshake-contract.json"
+      - "nexus-repo-link.json"
+      - "nexus-app.json"
+
+permissions:
+  contents: write
+
+jobs:
+  compatibility-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Live Tcg-game-engine-test Benefit-Integrity Audit
+        id: audit
+        env:
+          GH_API_VERSION: "2026-03-10"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_NOTIFY: ${{ github.event.inputs.force_notify || 'false' }}
+        run: |
+          python3 - <<'PYEOF'
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          app_manifest = json.loads(Path("nexus-app.json").read_text(encoding="utf-8"))
+          repo_link = json.loads(Path("nexus-repo-link.json").read_text(encoding="utf-8"))
+          contract = json.loads(Path("handshake-contract.json").read_text(encoding="utf-8"))
+          health_path = Path("docs/engine-health-status.json")
+          prev_health = json.loads(health_path.read_text(encoding="utf-8")) if health_path.exists() else {}
+
+          engine_repo = repo_link.get("linkedGameEngineRepo", "Summer-Warrior/Tcg-game-engine-test")
+          engine_branch = repo_link.get("linkedGameEngineBranch", "main")
+          source_repo = repo_link.get("thisRepo", "Summer-Warrior/MPV-TCG-Card-Making-Software-Updated")
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": os.environ["GH_API_VERSION"],
+              "User-Agent": "MPV-Engine-Watchdog/1.0",
+          }
+          token = os.environ.get("GITHUB_TOKEN", "").strip()
+          if token:
+              headers["Authorization"] = f"Bearer {token}"
+
+          def api_get(url: str):
+              req = urllib.request.Request(url, headers=headers)
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as resp:
+                      return resp.status, json.loads(resp.read().decode("utf-8"))
+              except urllib.error.HTTPError as err:
+                  return err.code, None
+              except Exception:
+                  return 0, None
+
+          def fetch_repo_file(rel_path: str):
+              url = f"https://api.github.com/repos/{engine_repo}/contents/{rel_path}?ref={engine_branch}"
+              code, payload = api_get(url)
+              if code != 200 or not isinstance(payload, dict) or not payload.get("content"):
+                  return code, None
+              raw = base64.b64decode(payload["content"]).decode("utf-8", errors="replace")
+              return 200, raw
+
+          branch_code, branch_data = api_get(f"https://api.github.com/repos/{engine_repo}/branches/{engine_branch}")
+          latest_sha = ""
+          if branch_code == 200 and isinstance(branch_data, dict):
+              latest_sha = str(branch_data.get("commit", {}).get("sha", ""))
+
+          broken_caps = []
+          affected_frames = []
+          missing_files = []
+          file_contents = {}
+
+          for req_file in contract.get("requiredEngineFiles", []):
+              code, text = fetch_repo_file(req_file)
+              if code != 200 or text is None:
+                  missing_files.append(f"{req_file} (HTTP {code})")
+              else:
+                  file_contents[req_file] = text
+
+          if missing_files:
+              broken_caps.append("MISSING_REQUIRED_ENGINE_FILES:" + ",".join(missing_files))
+              affected_frames.append("ALL_ENGINE_MAPPED_FRAMES")
+
+          models_src = file_contents.get("app/src/main/java/com/example/data/Models.kt", "")
+          engine_src = file_contents.get("app/src/main/java/com/example/data/GameEngine.kt", "")
+          rules_src = file_contents.get("firestore.rules", "")
+          combined_src = models_src + "\n" + engine_src + "\n" + rules_src
+
+          if models_src or engine_src:
+              if not re.search(r"21|BigInt", combined_src, re.IGNORECASE):
+                  broken_caps.append("21_DIGIT_BIGINT_CODES")
+                  affected_frames.append("21-Digit Custom Register Frames")
+              if not re.search(r"CardTemplate|CustomDeck|TurnPhase", combined_src):
+                  broken_caps.append("TURN_PHASE_AND_EFFECT_ENUMS")
+                  affected_frames.append("CardTemplate & TurnPhase Mapped Frames")
+              if not re.search(r"EDOPRO_CUSTOM_FORK|FORGE_CUSTOM_CLONE|HYBRID_FORGE_EDOPRO_MIX|custom", combined_src, re.IGNORECASE):
+                  broken_caps.append("NON_LOCKED_CUSTOM_CLONES")
+                  affected_frames.append("Non-Locked Clone Export Frames")
+
+          # Check remote handshake-contract.json if published
+          hc_code, remote_hc_raw = fetch_repo_file("handshake-contract.json")
+          if hc_code == 200 and remote_hc_raw:
+              try:
+                  remote_hc = json.loads(remote_hc_raw)
+                  if remote_hc.get("gameEngineConsent", {}).get("status") == "REJECTED":
+                      broken_caps.append("HANDSHAKE_CONTRACT_REVOKED")
+                      affected_frames.append("ALL_EXPORTED_PACK_FRAMES")
+              except json.JSONDecodeError:
+                  broken_caps.append("HANDSHAKE_CONTRACT_INVALID_JSON")
+
+          if not latest_sha:
+              severity = "DEGRADED"
+              broken_caps.append("ENGINE_REPO_UNREACHABLE")
+          elif len(missing_files) >= 3 or "HANDSHAKE_CONTRACT_REVOKED" in broken_caps or "21_DIGIT_BIGINT_CODES" in broken_caps:
+              severity = "BREAKING_INCOMPATIBLE"
+          elif broken_caps:
+              severity = "DEGRADED"
+          else:
+              severity = "HEALTHY"
+
+          now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          effective_sha = latest_sha or f"unreachable-{now_iso}"
+          alert_id = f"alert-{effective_sha[:12]}-{severity.lower()}"
+
+          unsigned_payload = {
+              "alertId": alert_id,
+              "sourceRepo": source_repo,
+              "targetEngineRepo": engine_repo,
+              "failingCommitSha": effective_sha if severity != "HEALTHY" else "",
+              "severity": severity,
+              "brokenCapabilities": broken_caps,
+              "affectedCardFrames": sorted(set(affected_frames)),
+              "masterHubAckStatus": "PENDING_ACK" if severity != "HEALTHY" else "NOT_REQUIRED",
+              "timestamp": now_iso,
+          }
+          canonical_bytes = json.dumps(unsigned_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+          unsigned_payload["signatureSha256"] = hashlib.sha256(canonical_bytes).hexdigest()
+
+          already_alerted = (
+              prev_health.get("failingCommitSha") == unsigned_payload["failingCommitSha"]
+              and prev_health.get("severity") == severity
+              and severity != "HEALTHY"
+          )
+          force_notify = os.environ.get("FORCE_NOTIFY", "false").lower() == "true"
+          should_notify = (severity in ("DEGRADED", "BREAKING_INCOMPATIBLE")) and (force_notify or not already_alerted)
+
+          health_path.parent.mkdir(parents=True, exist_ok=True)
+          health_path.write_text(json.dumps(unsigned_payload, indent=2) + "\n", encoding="utf-8")
+
+          gh_out = os.environ.get("GITHUB_OUTPUT")
+          if gh_out:
+              with open(gh_out, "a", encoding="utf-8") as out:
+                  out.write(f"severity={severity}\n")
+                  out.write(f"should_notify={'true' if should_notify else 'false'}\n")
+                  out.write(f"failing_sha={unsigned_payload['failingCommitSha']}\n")
+                  out.write(f"alert_id={alert_id}\n")
+                  out.write(f"broken_summary={', '.join(broken_caps) or 'none'}\n")
+
+          print(json.dumps(unsigned_payload, indent=2))
+          PYEOF
+
+      - name: Channel 1 — Master Hub Notification Handshake (repository_dispatch)
+        if: steps.audit.outputs.should_notify == 'true' && env.MASTER_HUB_DISPATCH_TOKEN != ''
+        env:
+          MASTER_HUB_DISPATCH_TOKEN: ${{ secrets.MASTER_HUB_DISPATCH_TOKEN }}
+        run: |
+          PAYLOAD="$(cat docs/engine-health-status.json)"
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            -H "Authorization: Bearer ${MASTER_HUB_DISPATCH_TOKEN}" \
+            "https://api.github.com/repos/Summer-Warrior/Nexus-Master-Hub/dispatches" \
+            -d "{\"event_type\":\"nexus_engine_breaking_alert\",\"client_payload\":${PAYLOAD}}"
+
+      - name: Channel 3 — Discord Admin Role Webhook Alert
+        if: steps.audit.outputs.should_notify == 'true' && env.ADMIN_DISCORD_WEBHOOK_URL != ''
+        env:
+          ADMIN_DISCORD_WEBHOOK_URL: ${{ secrets.ADMIN_DISCORD_WEBHOOK_URL }}
+          MASTER_HUB_ADMIN_ROLE_IDS: ${{ secrets.MASTER_HUB_ADMIN_ROLE_IDS }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          health = json.loads(Path("docs/engine-health-status.json").read_text(encoding="utf-8"))
+          role_ids = [r.strip() for r in os.environ.get("MASTER_HUB_ADMIN_ROLE_IDS", "").split(",") if r.strip()]
+          mentions = " ".join(f"<@&{rid}>" for rid in role_ids) or "@here"
+          commit_url = f"https://github.com/{health['targetEngineRepo']}/commit/{health['failingCommitSha']}"
+
+          body = {
+              "content": f"{mentions} **{health['severity']}** detected in `{health['targetEngineRepo']}`",
+              "embeds": [
+                  {
+                      "title": f"Engine Compatibility Alert: {health['severity']}",
+                      "url": commit_url,
+                      "color": 15158332 if health["severity"] == "BREAKING_INCOMPATIBLE" else 15105570,
+                      "fields": [
+                          {"name": "Alert ID", "value": health["alertId"], "inline": True},
+                          {"name": "Failing Commit", "value": f"`{health['failingCommitSha'][:12]}`", "inline": True},
+                          {"name": "Master Hub Ack", "value": health["masterHubAckStatus"], "inline": True},
+                          {
+                              "name": "Broken Capabilities",
+                              "value": ", ".join(health["brokenCapabilities"]) or "None",
+                              "inline": False,
+                          },
+                          {
+                              "name": "Affected Card Frames",
+                              "value": ", ".join(health["affectedCardFrames"]) or "None",
+                              "inline": False,
+                          },
+                      ],
+                      "timestamp": health["timestamp"],
+                  }
+              ],
+          }
+          req = urllib.request.Request(
+              os.environ["ADMIN_DISCORD_WEBHOOK_URL"],
+              data=json.dumps(body).encode("utf-8"),
+              headers={"Content-Type": "application/json", "User-Agent": "MPV-Engine-Watchdog/1.0"},
+              method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=20) as resp:
+              print("Discord webhook HTTP:", resp.status)
+          PYEOF
+
+      - name: Channel 4 — Administrative Email Alert (Resend / SendGrid / SMTP)
+        if: steps.audit.outputs.should_notify == 'true' && env.ADMIN_ALERT_EMAILS != ''
+        env:
+          ADMIN_ALERT_EMAILS: ${{ secrets.ADMIN_ALERT_EMAILS }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          ADMIN_EMAIL_FROM: ${{ secrets.ADMIN_EMAIL_FROM }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import smtplib
+          import urllib.request
+          from email.message import EmailMessage
+          from pathlib import Path
+
+          health = json.loads(Path("docs/engine-health-status.json").read_text(encoding="utf-8"))
+          recipients = [e.strip() for e in os.environ.get("ADMIN_ALERT_EMAILS", "").split(",") if e.strip()]
+          sender = os.environ.get("ADMIN_EMAIL_FROM", "alerts@nexus-master-hub.local").strip()
+          subject = f"[{health['severity']}] TCG Engine Compatibility Alert ({health['failingCommitSha'][:10]})"
+          plain_body = (
+              f"Source Repo: {health['sourceRepo']}\n"
+              f"Target Engine: {health['targetEngineRepo']}\n"
+              f"Failing Commit SHA: {health['failingCommitSha']}\n"
+              f"Severity: {health['severity']}\n"
+              f"Master Hub Ack Status: {health['masterHubAckStatus']}\n"
+              f"Broken Capabilities: {', '.join(health['brokenCapabilities'])}\n"
+              f"Affected Card Frames: {', '.join(health['affectedCardFrames'])}\n"
+              f"Signed Payload SHA-256: {health['signatureSha256']}\n"
+          )
+
+          resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+          sendgrid_key = os.environ.get("SENDGRID_API_KEY", "").strip()
+          smtp_host = os.environ.get("SMTP_HOST", "").strip()
+
+          if resend_key:
+              req = urllib.request.Request(
+                  "https://api.resend.com/emails",
+                  data=json.dumps({
+                      "from": sender,
+                      "to": recipients,
+                      "subject": subject,
+                      "text": plain_body,
+                  }).encode("utf-8"),
+                  headers={
+                      "Authorization": f"Bearer {resend_key}",
+                      "Content-Type": "application/json",
+                  },
+                  method="POST",
+              )
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  print("Resend Email HTTP:", resp.status)
+          elif sendgrid_key:
+              req = urllib.request.Request(
+                  "https://api.sendgrid.com/v3/mail/send",
+                  data=json.dumps({
+                      "personalizations": [{"to": [{"email": r} for r in recipients]}],
+                      "from": {"email": sender},
+                      "subject": subject,
+                      "content": [{"type": "text/plain", "value": plain_body}],
+                  }).encode("utf-8"),
+                  headers={
+                      "Authorization": f"Bearer {sendgrid_key}",
+                      "Content-Type": "application/json",
+                  },
+                  method="POST",
+              )
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  print("SendGrid Email HTTP:", resp.status)
+          elif smtp_host:
+              msg = EmailMessage()
+              msg["Subject"] = subject
+              msg["From"] = sender
+              msg["To"] = ", ".join(recipients)
+              msg.set_content(plain_body)
+              port = int(os.environ.get("SMTP_PORT", "587"))
+              with smtplib.SMTP(smtp_host, port, timeout=20) as server:
+                  server.starttls()
+                  if os.environ.get("SMTP_USERNAME"):
+                      server.login(os.environ["SMTP_USERNAME"], os.environ.get("SMTP_PASSWORD", ""))
+                  server.send_message(msg)
+              print("SMTP Email dispatched.")
+          else:
+              print("No email transport secret configured (RESEND_API_KEY, SENDGRID_API_KEY, or SMTP_HOST).")
+          PYEOF
+
+      - name: Commit Updated docs/engine-health-status.json
+        run: |
+          if [ -n "$(git status --porcelain docs/engine-health-status.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/engine-health-status.json
+            git commit -m "chore(engine-watch): update signed engine-health-status.json"
+            git push
+          fi

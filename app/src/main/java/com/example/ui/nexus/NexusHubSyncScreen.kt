@@ -3,10 +3,13 @@ package com.example.ui.nexus
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -71,7 +74,9 @@ import com.example.ui.theme.StatusOfflineAmber
 import com.example.ui.theme.StatusConnected
 
 private enum class NexusHubSection(val label: String) {
-    SYNC_LINK("Sync & Link"),
+    SYNC_LINK("Hub Link"),
+    ENGINE_SYNC("Engine Sync"),
+    FRAME_REVIEW("Frame Review"),
     CLIENTS("Clients"),
     CODER_EXPORT("Card Coder"),
 }
@@ -79,10 +84,14 @@ private enum class NexusHubSection(val label: String) {
 @Composable
 fun NexusHubSyncScreen(
     uiState: NexusHubUiState,
+    engineSyncState: EngineSyncUiState,
+    engineSyncViewModel: EngineSyncViewModel,
     autoTriggerSync: Boolean,
     activeMseCardName: String?,
     activeMseCardType: String?,
     activeMseCardRules: String?,
+    activeFrameWidthPx: Int,
+    activeFrameHeightPx: Int,
     onAutoSyncConsumed: () -> Unit,
     onSaveManifest: (NexusRepoLinkManifest) -> Unit,
     onVerifyAndPullHub: () -> Unit,
@@ -108,6 +117,7 @@ fun NexusHubSyncScreen(
     LaunchedEffect(autoTriggerSync) {
         if (autoTriggerSync) {
             onVerifyAndPullHub()
+            engineSyncViewModel.syncLiveGameEngine(uiState.fineGrainedPat.ifBlank { null })
             onAutoSyncConsumed()
         }
     }
@@ -140,6 +150,19 @@ fun NexusHubSyncScreen(
         }
     }
 
+    val saveHealthLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri != null) {
+            onWriteFileToUri(
+                context,
+                uri,
+                engineSyncViewModel.buildDiagnosticReportJson(),
+                "engine-health-status.json",
+            )
+        }
+    }
+
     fun copyToClipboard(label: String, content: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText(label, content))
@@ -147,10 +170,11 @@ fun NexusHubSyncScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        // ---- Compact Section Selector Strip ----
+        // ---- Horizontally Scrollable 5-Section Selector Strip (Zero Clipping on 360dp Phones) ----
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -162,12 +186,10 @@ fun NexusHubSyncScreen(
                         Text(
                             text = section.label,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            softWrap = false,
                         )
                     },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("nexus_tab_${section.name.lowercase()}"),
+                    modifier = Modifier.testTag("nexus_tab_${section.name.lowercase()}"),
                 )
             }
         }
@@ -193,6 +215,45 @@ fun NexusHubSyncScreen(
                     onDownloadPackJson = { savePackLauncher.launch("nexus-card-pack.json") },
                     onDownloadWorkflowYml = { saveWorkflowLauncher.launch("mpv-nexus-sync.yml") },
                     onCopyWorkflowYml = { copyToClipboard("mpv-nexus-sync.yml", onBuildWorkflowYaml()) },
+                )
+            }
+
+            NexusHubSection.ENGINE_SYNC -> {
+                EngineSyncSection(
+                    uiState = engineSyncState,
+                    fineGrainedPat = uiState.fineGrainedPat,
+                    onSyncLiveEngine = {
+                        engineSyncViewModel.syncLiveGameEngine(uiState.fineGrainedPat.ifBlank { null })
+                    },
+                    onRecordCardMakerConsent = engineSyncViewModel::recordCardMakerConsent,
+                    onFinalizeStagedUpdate = engineSyncViewModel::finalizeStagedEngineSnapshot,
+                    onTogglePauseSync = engineSyncViewModel::pauseOrResumeSync,
+                    onSaveAdminGateAndRelays = engineSyncViewModel::updateAdminGateAndRelays,
+                    onDispatchAdminNotifications = {
+                        engineSyncViewModel.dispatchManualAdminNotifications(uiState.fineGrainedPat.ifBlank { null })
+                    },
+                    onExportHealthJson = { saveHealthLauncher.launch("engine-health-status.json") },
+                    onCopyContractJson = {
+                        copyToClipboard("handshake-contract.json", engineSyncViewModel.buildHandshakeContractJson())
+                    },
+                    onLaunchMailto = {
+                        val intent = Intent(Intent.ACTION_SENDTO, engineSyncViewModel.buildMailtoEscalationUri())
+                        runCatching { context.startActivity(intent) }
+                            .onFailure { onNotify("No email client found; use Save Health JSON or Copy.") }
+                    },
+                )
+            }
+
+            NexusHubSection.FRAME_REVIEW -> {
+                CardFrameReviewerSection(
+                    uiState = engineSyncState,
+                    activeMseCardName = activeMseCardName,
+                    activeMseCardType = activeMseCardType,
+                    activeMseCardRules = activeMseCardRules,
+                    activeFrameWidthPx = activeFrameWidthPx,
+                    activeFrameHeightPx = activeFrameHeightPx,
+                    viewModel = engineSyncViewModel,
+                    onCopyText = ::copyToClipboard,
                 )
             }
 

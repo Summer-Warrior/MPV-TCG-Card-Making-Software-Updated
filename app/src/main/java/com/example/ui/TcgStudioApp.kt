@@ -32,9 +32,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import android.content.Intent
+import androidx.compose.ui.platform.LocalContext
 import com.example.ui.diagnostics.BridgeDiagnosticsScreen
 import com.example.ui.diagnostics.BridgeDiagnosticsSheet
 import com.example.ui.fonts.FontsScreen
+import com.example.ui.nexus.AdminBreakingChangeAlertModal
+import com.example.ui.nexus.EngineSyncViewModel
 import com.example.ui.nexus.NexusHubSyncScreen
 import com.example.ui.nexus.NexusHubViewModel
 import com.example.ui.theme.TcgStudioTheme
@@ -60,9 +64,11 @@ object StudioRoutes {
 fun TcgStudioApp(
     viewModel: StudioViewModel,
     nexusHubViewModel: NexusHubViewModel,
+    engineSyncViewModel: EngineSyncViewModel,
     pendingHubSyncHandshake: Boolean = false,
     onHubSyncHandshakeConsumed: () -> Unit = {},
 ) {
+    val context = LocalContext.current
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val archive by viewModel.archive.collectAsStateWithLifecycle()
     val activeCardIndex by viewModel.activeCardIndex.collectAsStateWithLifecycle()
@@ -87,6 +93,7 @@ fun TcgStudioApp(
     val templateValidation by viewModel.templateValidation.collectAsStateWithLifecycle()
     val isValidatingTemplate by viewModel.isValidatingTemplate.collectAsStateWithLifecycle()
     val nexusHubState by nexusHubViewModel.uiState.collectAsStateWithLifecycle()
+    val engineSyncState by engineSyncViewModel.uiState.collectAsStateWithLifecycle()
 
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -101,6 +108,11 @@ fun TcgStudioApp(
         }
         launch {
             nexusHubViewModel.messages.collect { message ->
+                snackbarHostState.showSnackbar(message)
+            }
+        }
+        launch {
+            engineSyncViewModel.messages.collect { message ->
                 snackbarHostState.showSnackbar(message)
             }
         }
@@ -299,15 +311,19 @@ fun TcgStudioApp(
                 composable(StudioRoutes.NEXUS_HUB) {
                     val activeCard = archive?.document?.cards?.getOrNull(activeCardIndex)
                     ToolScreenScaffold(
-                        title = "Nexus Master Hub Sync",
+                        title = "Nexus Master Hub & Engine Sync",
                         onBack = { navController.popBackStack() },
                     ) {
                         NexusHubSyncScreen(
                             uiState = nexusHubState,
+                            engineSyncState = engineSyncState,
+                            engineSyncViewModel = engineSyncViewModel,
                             autoTriggerSync = pendingHubSyncHandshake,
                             activeMseCardName = activeCard?.name,
                             activeMseCardType = activeCard?.fullTypeLine,
                             activeMseCardRules = activeCard?.ruleText,
+                            activeFrameWidthPx = styleSpec.cardWidthPx,
+                            activeFrameHeightPx = styleSpec.cardHeightPx,
                             onAutoSyncConsumed = onHubSyncHandshakeConsumed,
                             onSaveManifest = nexusHubViewModel::updateManifest,
                             onVerifyAndPullHub = nexusHubViewModel::verifyMutualLinkAndCheckHub,
@@ -340,6 +356,33 @@ fun TcgStudioApp(
                 onRetryHealth = { viewModel.checkBridgeHealth(autoRenderIfOnline = archive != null) },
                 onOpenFullSetup = { navController.navigate(StudioRoutes.BRIDGE) },
                 onDismiss = { showBridgeSheet = false },
+            )
+        }
+
+        // High-Priority Blocking Alert Modal shown EXCLUSIVELY to Master Hub Admins
+        if (engineSyncState.showAdminBlockingModal && engineSyncState.isCurrentUserAdmin) {
+            AdminBreakingChangeAlertModal(
+                healthStatus = engineSyncState.healthStatus,
+                onPauseSync = { engineSyncViewModel.pauseOrResumeSync(true) },
+                onInspectDiff = {
+                    engineSyncViewModel.dismissAdminBlockingModal()
+                    navController.navigate(StudioRoutes.NEXUS_HUB) { launchSingleTop = true }
+                },
+                onExportDiagnosticReport = {
+                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(
+                        android.content.ClipData.newPlainText(
+                            "engine-health-status.json",
+                            engineSyncViewModel.buildDiagnosticReportJson(),
+                        )
+                    )
+                    uiScope.launch { snackbarHostState.showSnackbar("Copied signed engine-health-status.json diagnostic report.") }
+                },
+                onLaunchMailto = {
+                    val mailIntent = Intent(Intent.ACTION_SENDTO, engineSyncViewModel.buildMailtoEscalationUri())
+                    runCatching { context.startActivity(mailIntent) }
+                },
+                onDismiss = engineSyncViewModel::dismissAdminBlockingModal,
             )
         }
     }

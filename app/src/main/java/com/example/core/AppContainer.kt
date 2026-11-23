@@ -81,4 +81,14 @@ class AppContainer(context: Context) {
         context = appContext,
         moshi = moshi,
     )
+
+    val engineSyncIngestionService = com.example.data.nexus.EngineSyncIngestionService(
+        okHttpClient = okHttpClient,
+        moshi = moshi,
+    )
+
+    val engineSyncRepository = com.example.data.nexus.EngineSyncRepository(
+        context = appContext,
+        moshi = moshi,
+    )
 }
