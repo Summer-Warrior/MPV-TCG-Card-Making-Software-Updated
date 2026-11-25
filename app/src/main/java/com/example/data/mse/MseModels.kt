@@ -255,6 +255,102 @@ data class MseSetDocument(
         return copy(nodes = nodes + blankCard)
     }
 
+    /**
+     * Appends (or inserts after [insertAfterCardIndex]) a card built from key/value fields.
+     * STRICT INVARIANT: `image` is ALWAYS stripped unless [preserveExistingImageField] is true
+     * (used only when merging an external `.mse-set` card that already carried an embedded art blob).
+     */
+    fun withAppendedCardFromFields(
+        fields: Map<String, String>,
+        timestampIso: String,
+        insertAfterCardIndex: Int? = null,
+        preserveExistingImageField: Boolean = false,
+    ): MseSetDocument {
+        val children = mutableListOf<MseLineNode>(
+            MseLineNode.Entry(key = "has styling", inlineValue = "false"),
+            MseLineNode.Entry(key = "time created", inlineValue = timestampIso),
+            MseLineNode.Entry(key = "time modified", inlineValue = timestampIso),
+        )
+        val reserved = setOf("has styling", "time created", "time modified")
+        fields.forEach { (key, rawValue) ->
+            val cleanKey = key.trim()
+            if (cleanKey.isEmpty() || cleanKey in reserved) return@forEach
+            if (cleanKey.equals("image", ignoreCase = true) && !preserveExistingImageField) {
+                return@forEach
+            }
+            if (cleanKey.equals("image", ignoreCase = true) && rawValue.isBlank()) {
+                return@forEach
+            }
+            val isMultiline = rawValue.contains('\n') ||
+                (cleanKey in MULTILINE_CARD_FIELDS && rawValue.isNotEmpty())
+            children += if (isMultiline) {
+                MseLineNode.Entry(key = cleanKey, multilineValue = rawValue.split("\n"))
+            } else {
+                MseLineNode.Entry(key = cleanKey, inlineValue = rawValue)
+            }
+        }
+        val newCard = MseLineNode.Entry(key = "card", isBlock = true, children = children)
+        if (insertAfterCardIndex != null) {
+            val anchor = cards.getOrNull(insertAfterCardIndex)
+            if (anchor != null) {
+                val updated = nodes.toMutableList()
+                updated.add(anchor.documentNodeIndex + 1, newCard)
+                return copy(nodes = updated)
+            }
+        }
+        return copy(nodes = nodes + newCard)
+    }
+
+    /**
+     * Non-destructively maps existing card field keys to new target keys (e.g., when switching
+     * game styles or cross-game Split-Off styles). Never touches `"image"`.
+     */
+    fun withRemappedCardFields(
+        fieldMapping: Map<String, String>,
+        skipCanonOriginals: Boolean = true,
+    ): MseSetDocument {
+        if (fieldMapping.isEmpty()) return this
+        val cleanMap = fieldMapping.filter { (src, dst) ->
+            src.isNotBlank() && dst.isNotBlank() &&
+                !src.equals("image", ignoreCase = true) &&
+                !dst.equals("image", ignoreCase = true) &&
+                src != dst
+        }
+        if (cleanMap.isEmpty()) return this
+
+        val updatedNodes = nodes.map { node ->
+            if (node is MseLineNode.Entry && node.key == "card" && node.isBlock) {
+                val origin = node.children
+                    .filterIsInstance<MseLineNode.Entry>()
+                    .firstOrNull { it.key == "card origin" }
+                    ?.textValue
+                    ?.trim()
+                if (skipCanonOriginals && origin.equals("CANON_ORIGINAL", ignoreCase = true)) {
+                    node
+                } else {
+                    val existingKeys = node.children
+                        .filterIsInstance<MseLineNode.Entry>()
+                        .map { it.key }
+                        .toMutableSet()
+                    val extraMapped = mutableListOf<MseLineNode>()
+                    node.children.forEach { child ->
+                        if (child is MseLineNode.Entry && !child.isBlock) {
+                            val targetKey = cleanMap[child.key]
+                            if (targetKey != null && targetKey !in existingKeys && child.textValue.isNotBlank()) {
+                                existingKeys += targetKey
+                                extraMapped += child.copy(key = targetKey)
+                            }
+                        }
+                    }
+                    if (extraMapped.isEmpty()) node else node.copy(children = node.children + extraMapped)
+                }
+            } else {
+                node
+            }
+        }
+        return copy(nodes = updatedNodes)
+    }
+
     fun withDuplicatedCard(cardIndex: Int, timestampIso: String): MseSetDocument {
         val source = cards.getOrNull(cardIndex) ?: return this
         val clonedChildren = source.entry.children.map { node ->
@@ -439,6 +535,21 @@ data class MseCardView(
      */
     val image: String?
         get() = field("image").trim().takeIf { it.isNotEmpty() }
+
+    val cardOriginRaw: String
+        get() = field("card origin").trim().ifEmpty { "ORIGINAL_OC_CARD" }
+
+    val isCanonOriginal: Boolean
+        get() = cardOriginRaw.equals("CANON_ORIGINAL", ignoreCase = true)
+
+    val isFanAlternateVariant: Boolean
+        get() = cardOriginRaw.equals("FAN_ALTERNATE_VARIANT", ignoreCase = true)
+
+    val linkedCanonCardId: String?
+        get() = field("linked canon card id").trim().takeIf { it.isNotEmpty() }
+
+    val canonSourceId: String?
+        get() = field("canon source id").trim().takeIf { it.isNotEmpty() }
 
     val allEditableFields: Map<String, String>
         get() = entry.children

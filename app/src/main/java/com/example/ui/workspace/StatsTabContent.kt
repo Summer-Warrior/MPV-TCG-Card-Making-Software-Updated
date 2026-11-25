@@ -1,5 +1,6 @@
 package com.example.ui.workspace
 
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -14,14 +15,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CompareArrows
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +42,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.mse.MseCardView
 import com.example.data.mse.MseSetArchive
+import com.example.domain.comparison.CardOrigin
+import com.example.domain.telemetry.TelemetryInteractionType
+import com.example.ui.telemetry.CardUsageReportsContent
+import com.example.ui.telemetry.CardUsageReportsUiState
 
 private data class StatBucket(
     val label: String,
@@ -57,14 +71,85 @@ private data class SetStatistics(
 @Composable
 fun StatsTabContent(
     archive: MseSetArchive,
+    usageReportsState: CardUsageReportsUiState = CardUsageReportsUiState(),
+    githubPat: String = "",
+    onOpenSetComparison: () -> Unit = {},
+    onPullUsageReports: (String) -> Unit = {},
+    onImportUsageReportUri: (Uri) -> Unit = {},
+    onSelectUsageOriginFilter: (CardOrigin?) -> Unit = {},
+    onSelectUsageInteractionFilter: (TelemetryInteractionType?) -> Unit = {},
+    onUsageSearchQueryChanged: (String) -> Unit = {},
+    onEditTelemetryCardInStudio: (cardId: String, cardName: String) -> Unit = { _, _ -> },
+    onBranchTelemetryCardVariant: (cardId: String, cardName: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val cards = archive.document.cards
     val stats = remember(cards) { computeSetStatistics(cards) }
+    var subTab by remember { mutableIntStateOf(0) } // 0 = Set Stats, 1 = Usage & Interactions
+
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = subTab == 0,
+                    onClick = { subTab = 0 },
+                    label = { Text("Set Stats") },
+                    modifier = Modifier.testTag("stats_subtab_set"),
+                )
+                FilterChip(
+                    selected = subTab == 1,
+                    onClick = { subTab = 1 },
+                    label = {
+                        Text(
+                            if (usageReportsState.dashboard.reportCount > 0) {
+                                "Usage (${usageReportsState.dashboard.reportCount})"
+                            } else {
+                                "Usage & Interactions"
+                            }
+                        )
+                    },
+                    modifier = Modifier.testTag("stats_subtab_usage"),
+                )
+            }
+
+            FilledTonalButton(
+                onClick = onOpenSetComparison,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.testTag("stats_compare_set_button"),
+            ) {
+                Icon(Icons.Default.CompareArrows, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Compare Set", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            }
+        }
+
+        if (subTab == 1) {
+            CardUsageReportsContent(
+                uiState = usageReportsState,
+                githubPat = githubPat,
+                hasActiveSetOpen = true,
+                onPullFromGitHub = onPullUsageReports,
+                onImportFromUri = onImportUsageReportUri,
+                onSelectOriginFilter = onSelectUsageOriginFilter,
+                onSelectInteractionFilter = onSelectUsageInteractionFilter,
+                onSearchQueryChanged = onUsageSearchQueryChanged,
+                onEditCardInStudio = onEditTelemetryCardInStudio,
+                onBranchCardVariant = onBranchTelemetryCardVariant,
+                modifier = Modifier.weight(1f),
+            )
+            return
+        }
 
     LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .testTag("stats_tab_list"),
         contentPadding = PaddingValues(vertical = 14.dp),
@@ -181,6 +266,7 @@ fun StatsTabContent(
                 total = stats.totalCards,
             )
         }
+    }
     }
 }
 

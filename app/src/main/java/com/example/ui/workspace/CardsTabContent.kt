@@ -40,10 +40,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.TableRows
 import androidx.compose.material.icons.filled.Tune
@@ -104,6 +106,9 @@ import com.example.data.mse.MseTemplateCatalogRepository
 import com.example.data.mse.ResolvedOfflineFrame
 import com.example.data.settings.PhysicalCardProfile
 import com.example.data.settings.StudioSettings
+import com.example.domain.comparison.CardOrigin
+import com.example.domain.comparison.SplitOffSetManifest
+import com.example.domain.frameworks.UniversalCardFramework
 import com.example.ui.CardRenderState
 import com.example.ui.editor.ArtCropDialog
 import com.example.ui.editor.CardFieldEditTarget
@@ -129,6 +134,8 @@ import kotlin.math.roundToInt
 fun CardsTabContent(
     settings: StudioSettings,
     archive: MseSetArchive,
+    splitOffManifest: SplitOffSetManifest? = null,
+    activeFramework: UniversalCardFramework? = null,
     activeCardIndex: Int,
     styleSpec: MseStyleSpec,
     activeDiscoveredStyle: DiscoveredStyle?,
@@ -144,6 +151,7 @@ fun CardsTabContent(
     onAddBlankCard: () -> Unit,
     onDuplicateCard: (Int) -> Unit,
     onDeleteCard: (Int) -> Unit,
+    onBranchAlternateLoreVariant: (Int) -> Unit = {},
     onUpdateCardFields: (Map<String, String?>) -> Unit,
     onEmbedCroppedArt: (ByteArray) -> Unit,
     onClearCardArt: () -> Unit,
@@ -159,6 +167,8 @@ fun CardsTabContent(
     val cards = archive.document.cards
     val activeCard = cards.getOrNull(activeCardIndex)
     val embeddedArtBytes = archive.getArtBytes(activeCardIndex)
+    val isProtectedCanonCard = splitOffManifest?.preserveAllOriginalOfficialCards == true &&
+        activeCard?.isCanonOriginal == true
 
     val customCardFontFamily = remember(localSelectedFontFile?.absolutePath, localSelectedFontFile?.lastModified()) {
         localSelectedFontFile?.let { file ->
@@ -418,7 +428,11 @@ fun CardsTabContent(
                 }
 
                 Text(
-                    text = stringResource(R.string.offline_frame_caption),
+                    text = if (activeFramework != null) {
+                        "${activeFramework.effectiveShortName} • ${stringResource(R.string.offline_frame_caption)}"
+                    } else {
+                        stringResource(R.string.offline_frame_caption)
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -428,6 +442,64 @@ fun CardsTabContent(
                         .padding(horizontal = 16.dp),
                     textAlign = TextAlign.Center,
                 )
+            }
+        }
+
+        // ---- Canon Lore Preservation Strip (Cleanly BELOW Card — NEVER Over Card) ----
+        if (splitOffManifest != null && activeCard != null) {
+            val originEnum = CardOrigin.fromWire(activeCard.cardOriginRaw)
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("card_origin_status_strip"),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        if (isProtectedCanonCard) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Protected Canon Original",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                        Text(
+                            text = if (isProtectedCanonCard) {
+                                "Canon Original • Protected"
+                            } else {
+                                originEnum.displayLabel
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (isProtectedCanonCard) {
+                        FilledTonalButton(
+                            onClick = { onBranchAlternateLoreVariant(activeCardIndex) },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                            modifier = Modifier
+                                .height(28.dp)
+                                .testTag("branch_alternate_lore_variant_button"),
+                        ) {
+                            Icon(Icons.Default.AccountTree, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Branch AU Variant", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                        }
+                    }
+                }
             }
         }
 

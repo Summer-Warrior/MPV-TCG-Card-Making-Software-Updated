@@ -3,6 +3,14 @@ package com.example.data.mse
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.example.domain.comparison.CardOrigin
+import com.example.domain.comparison.ComparableCardRecord
+import com.example.domain.comparison.ComparableSet
+import com.example.domain.comparison.SetComparisonEngine
+import com.example.domain.comparison.SplitOffKind
+import com.example.domain.comparison.SplitOffSetManifest
+import com.example.domain.frameworks.FrameworkMseScaffoldGenerator
+import com.example.domain.frameworks.UniversalCardFramework
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
@@ -57,8 +65,13 @@ class MseWorkspaceRepository(
         Types.newParameterizedType(List::class.java, RecentSetRecord::class.java)
     ).indent("  ")
 
+    private val splitOffManifestAdapter = moshi.adapter(SplitOffSetManifest::class.java).indent("  ")
+
     private val _archive = MutableStateFlow<MseSetArchive?>(null)
     val archive: StateFlow<MseSetArchive?> = _archive.asStateFlow()
+
+    private val _splitOffManifest = MutableStateFlow<SplitOffSetManifest?>(null)
+    val splitOffManifest: StateFlow<SplitOffSetManifest?> = _splitOffManifest.asStateFlow()
 
     private val _activeCardIndex = MutableStateFlow(0)
     val activeCardIndex: StateFlow<Int> = _activeCardIndex.asStateFlow()
@@ -71,6 +84,26 @@ class MseWorkspaceRepository(
 
     private val _hasUnsavedChanges = MutableStateFlow(false)
     val hasUnsavedChanges: StateFlow<Boolean> = _hasUnsavedChanges.asStateFlow()
+
+    private fun extractSplitOffManifest(archive: MseSetArchive?): SplitOffSetManifest? {
+        val bytes = archive?.embeddedBlobs?.get(SetComparisonEngine.SPLIT_OFF_MANIFEST_BLOB_NAME)
+            ?: return null
+        return runCatching {
+            splitOffManifestAdapter.fromJson(bytes.toString(Charsets.UTF_8))
+        }.getOrNull()
+    }
+
+    private fun setActiveArchiveInternal(archive: MseSetArchive?) {
+        _archive.value = archive
+        _splitOffManifest.value = extractSplitOffManifest(archive)
+    }
+
+    fun isCardProtectedCanon(cardIndex: Int): Boolean {
+        val manifest = _splitOffManifest.value ?: return false
+        if (!manifest.preserveAllOriginalOfficialCards) return false
+        val card = _archive.value?.document?.cards?.getOrNull(cardIndex) ?: return false
+        return card.isCanonOriginal
+    }
 
     private val undoStack = ArrayDeque<WorkspaceSnapshot>()
     private val redoStack = ArrayDeque<WorkspaceSnapshot>()
@@ -107,7 +140,7 @@ class MseWorkspaceRepository(
         if (undoStack.isEmpty()) return false
         val previous = undoStack.removeLast()
         redoStack.addLast(WorkspaceSnapshot(current, _activeCardIndex.value))
-        _archive.value = previous.archive
+        setActiveArchiveInternal(previous.archive)
         val maxIdx = (previous.archive.document.cards.size - 1).coerceAtLeast(0)
         _activeCardIndex.value = previous.activeCardIndex.coerceIn(0, maxIdx)
         _hasUnsavedChanges.value = true
@@ -120,7 +153,7 @@ class MseWorkspaceRepository(
         if (redoStack.isEmpty()) return false
         val next = redoStack.removeLast()
         undoStack.addLast(WorkspaceSnapshot(current, _activeCardIndex.value))
-        _archive.value = next.archive
+        setActiveArchiveInternal(next.archive)
         val maxIdx = (next.archive.document.cards.size - 1).coerceAtLeast(0)
         _activeCardIndex.value = next.activeCardIndex.coerceIn(0, maxIdx)
         _hasUnsavedChanges.value = true
@@ -194,13 +227,145 @@ class MseWorkspaceRepository(
 
         val persisted = writeArchiveToLocalFile(blank)
         clearHistory()
-        _archive.value = persisted
+        setActiveArchiveInternal(persisted)
         _activeCardIndex.value = 0
         _hasUnsavedChanges.value = false
         recordInRecentSets(persisted)
 
         if (discoveredStyle != null) {
             applyDiscoveredStyleSpec(discoveredStyle)
+        }
+        persisted
+    }
+
+    suspend fun createNewSetFromFramework(
+        title: String,
+        framework: UniversalCardFramework,
+        matchedDiscoveredStyle: DiscoveredStyle? = null,
+    ): MseSetArchive = withContext(Dispatchers.IO) {
+        val gameSlug = FrameworkMseScaffoldGenerator.sanitizeMseId(framework.upstreamMseGameId ?: framework.id)
+        val styleSlug = matchedDiscoveredStyle?.stylesheetId
+            ?: FrameworkMseScaffoldGenerator.sanitizeMseId(framework.upstreamMseStyleId ?: "standard")
+        val setId = "set_${UUID.randomUUID().toString().take(8)}"
+        val safeTitle = title.trim().ifEmpty { "${framework.effectiveShortName} Custom Set" }
+        val fileName = "${safeTitle.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').ifEmpty { "untitled" }}.mse-set"
+        val blank = MseSetParser.createBlankArchive(
+            displayName = fileName,
+            title = safeTitle,
+            game = gameSlug,
+            stylesheet = styleSlug,
+        ).copy(id = setId)
+
+        val persisted = writeArchiveToLocalFile(blank)
+        clearHistory()
+        setActiveArchiveInternal(persisted)
+        _activeCardIndex.value = 0
+        _hasUnsavedChanges.value = false
+        recordInRecentSets(persisted)
+
+        if (matchedDiscoveredStyle != null) {
+            applyDiscoveredStyleSpec(matchedDiscoveredStyle)
+        } else {
+            _styleSpec.value = FrameworkMseScaffoldGenerator.toStructuredStyleSpec(framework)
+        }
+        persisted
+    }
+
+    /**
+     * Forks any pulled Official Set into a Fan-Fiction / Custom Split-Off `.mse-set`.
+     *
+     * MANDATORY CANON LORE PRESERVATION INVARIANT:
+     * - Copies 100% of [officialSet.cards] intact as `CANON_ORIGINAL`.
+     * - Strictly leaves every card's `image` == null (zero copyrighted official art copied).
+     * - Embeds `split_off_manifest.json` losslessly inside `.mse-set` ZIP (`preserveAllOriginalOfficialCards = true`, `upstreamSourceLock = false`).
+     */
+    suspend fun createFanFictionSplitOffSet(
+        officialSet: ComparableSet,
+        splitOffTitle: String,
+        splitOffKind: SplitOffKind,
+        divergenceNotes: String,
+        targetFramework: UniversalCardFramework? = null,
+        discoveredStyle: DiscoveredStyle? = null,
+    ): MseSetArchive = withContext(Dispatchers.IO) {
+        val setId = "splitoff_${UUID.randomUUID().toString().take(8)}"
+        val safeTitle = splitOffTitle.trim().ifEmpty { "${officialSet.setName} — ${splitOffKind.displayLabel}" }
+        val fileName = "${safeTitle.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').ifEmpty { "splitoff" }}.mse-set"
+        val gameSlug = discoveredStyle?.gameId
+            ?: targetFramework?.let { FrameworkMseScaffoldGenerator.sanitizeMseId(it.upstreamMseGameId ?: it.id) }
+            ?: officialSet.gameId.ifBlank { "magic" }
+        val styleSlug = discoveredStyle?.stylesheetId
+            ?: targetFramework?.let { FrameworkMseScaffoldGenerator.sanitizeMseId(it.upstreamMseStyleId ?: "standard") }
+            ?: "m15-altered"
+        val nowIso = MseSetParser.currentMseTimestamp()
+
+        val baseArchive = MseSetParser.createBlankArchive(
+            displayName = fileName,
+            title = safeTitle,
+            game = gameSlug,
+            stylesheet = styleSlug,
+        )
+        // Replace the single empty starter card with 100% preserved CANON_ORIGINAL cards
+        var doc = if (officialSet.cards.isNotEmpty()) {
+            baseArchive.document.withDeletedCard(0)
+        } else {
+            baseArchive.document
+        }
+        doc = doc.withSetInfoUpdated(
+            doc.setInfo.copy(
+                title = safeTitle,
+                description = buildString {
+                    append("Fan-Fiction Split-Off from: ${officialSet.setName} (${officialSet.cards.size}/${officialSet.cards.size} Canon Cards Preserved).")
+                    if (divergenceNotes.isNotBlank()) {
+                        append("\n\nDivergence Notes:\n")
+                        append(divergenceNotes.trim())
+                    }
+                },
+            )
+        )
+        officialSet.cards.forEach { officialCard ->
+            val fields = SetComparisonEngine.createReferenceBaselineFields(
+                officialCard = officialCard,
+                origin = CardOrigin.CANON_ORIGINAL,
+            )
+            doc = doc.withAppendedCardFromFields(
+                fields = fields,
+                timestampIso = nowIso,
+                preserveExistingImageField = false,
+            )
+        }
+
+        val manifest = SplitOffSetManifest(
+            splitOffId = setId,
+            splitOffTitle = safeTitle,
+            splitOffKind = splitOffKind.wireValue,
+            parentOfficialSetId = officialSet.setId,
+            parentOfficialSetName = officialSet.setName,
+            parentOfficialSource = officialSet.source,
+            parentGameId = officialSet.gameId,
+            preserveAllOriginalOfficialCards = true,
+            preservedCanonCardCount = officialSet.cards.size,
+            canonDivergenceNotes = divergenceNotes.trim(),
+            upstreamSourceLock = false,
+            frameworkId = targetFramework?.id,
+            createdAt = nowIso,
+        )
+        val manifestBytes = splitOffManifestAdapter.toJson(manifest).toByteArray(Charsets.UTF_8)
+        val archiveWithManifest = baseArchive.copy(
+            id = setId,
+            document = doc,
+            embeddedBlobs = baseArchive.embeddedBlobs + (SetComparisonEngine.SPLIT_OFF_MANIFEST_BLOB_NAME to manifestBytes),
+        )
+
+        val persisted = writeArchiveToLocalFile(archiveWithManifest)
+        clearHistory()
+        setActiveArchiveInternal(persisted)
+        _activeCardIndex.value = 0
+        _hasUnsavedChanges.value = false
+        recordInRecentSets(persisted)
+
+        when {
+            discoveredStyle != null -> applyDiscoveredStyleSpec(discoveredStyle)
+            targetFramework != null -> _styleSpec.value = FrameworkMseScaffoldGenerator.toStructuredStyleSpec(targetFramework)
         }
         persisted
     }
@@ -221,7 +386,7 @@ class MseWorkspaceRepository(
 
             val persisted = writeArchiveToLocalFile(loaded)
             clearHistory()
-            _archive.value = persisted
+            setActiveArchiveInternal(persisted)
             _activeCardIndex.value = 0
             _hasUnsavedChanges.value = false
             recordInRecentSets(persisted)
@@ -248,7 +413,7 @@ class MseWorkspaceRepository(
                     localFilePath = file.absolutePath,
                 )
                 clearHistory()
-                _archive.value = loaded
+                setActiveArchiveInternal(loaded)
                 _activeCardIndex.value = 0
                 _hasUnsavedChanges.value = false
                 recordInRecentSets(loaded)
@@ -291,9 +456,13 @@ class MseWorkspaceRepository(
 
     fun closeActiveSet() {
         clearHistory()
-        _archive.value = null
+        setActiveArchiveInternal(null)
         _activeCardIndex.value = 0
         _hasUnsavedChanges.value = false
+    }
+
+    fun applyFrameworkStyleSpec(framework: UniversalCardFramework) {
+        _styleSpec.value = FrameworkMseScaffoldGenerator.toStructuredStyleSpec(framework)
     }
 
     suspend fun loadStyleFromUri(uri: Uri): Result<MseStyleSpec> = withContext(Dispatchers.IO) {
@@ -392,6 +561,10 @@ class MseWorkspaceRepository(
 
     suspend fun deleteCard(cardIndex: Int): Int = withContext(Dispatchers.IO) {
         val current = _archive.value ?: return@withContext 0
+        // MANDATORY CANON LORE PRESERVATION GUARD: never delete a preserved CANON_ORIGINAL card.
+        if (isCardProtectedCanon(cardIndex)) {
+            return@withContext CANON_PROTECTED_SENTINEL
+        }
         pushUndoSnapshot()
         val afterDelete = current.document.withDeletedCard(cardIndex)
         val finalDoc = if (afterDelete.cards.isEmpty()) {
@@ -399,17 +572,166 @@ class MseWorkspaceRepository(
         } else {
             afterDelete
         }
-        _archive.value = current.copy(document = finalDoc)
+        setActiveArchiveInternal(current.copy(document = finalDoc))
         _hasUnsavedChanges.value = true
         val newIdx = cardIndex.coerceIn(0, (finalDoc.cards.size - 1).coerceAtLeast(0))
         _activeCardIndex.value = newIdx
         newIdx
     }
 
+    /**
+     * 1-tap "Branch Alternate Lore Variant": creates a NEW editable `FAN_ALTERNATE_VARIANT` card
+     * linked to the untouched `CANON_ORIGINAL` card, keeping strictly `image == null`.
+     */
+    suspend fun branchAlternateLoreVariant(canonCardIndex: Int): Int = withContext(Dispatchers.IO) {
+        val current = _archive.value ?: return@withContext 0
+        val source = current.document.cards.getOrNull(canonCardIndex) ?: return@withContext 0
+        pushUndoSnapshot()
+        val fields = LinkedHashMap(source.allEditableFields)
+        fields.remove("image") // STRICT: never copy art automatically
+        val baseName = source.name.ifBlank { "Card #${canonCardIndex + 1}" }
+        fields["name"] = if (baseName.endsWith("(Alternate)")) baseName else "$baseName (Alternate)"
+        fields[SetComparisonEngine.MSE_FIELD_CARD_ORIGIN] = CardOrigin.FAN_ALTERNATE_VARIANT.wireValue
+        val canonId = source.canonSourceId ?: source.field("passcode").ifBlank { "mse_card_${canonCardIndex + 1}" }
+        fields[SetComparisonEngine.MSE_FIELD_LINKED_CANON_ID] = canonId
+        fields.remove(SetComparisonEngine.MSE_FIELD_CANON_SOURCE_ID)
+
+        val updatedDoc = current.document.withAppendedCardFromFields(
+            fields = fields,
+            timestampIso = MseSetParser.currentMseTimestamp(),
+            insertAfterCardIndex = canonCardIndex,
+            preserveExistingImageField = false,
+        )
+        setActiveArchiveInternal(current.copy(document = updatedDoc))
+        _hasUnsavedChanges.value = true
+        val newIdx = (canonCardIndex + 1).coerceIn(0, (updatedDoc.cards.size - 1).coerceAtLeast(0))
+        _activeCardIndex.value = newIdx
+        newIdx
+    }
+
+    /**
+     * Appends a metadata-only copy of an official card baseline (`image == null`).
+     */
+    suspend fun copyOfficialReferenceBaselineCard(
+        officialCard: ComparableCardRecord,
+        origin: CardOrigin = CardOrigin.FAN_ALTERNATE_VARIANT,
+    ): Int = withContext(Dispatchers.IO) {
+        val current = _archive.value ?: return@withContext -1
+        pushUndoSnapshot()
+        val fields = SetComparisonEngine.createReferenceBaselineFields(officialCard, origin)
+        val updatedDoc = current.document.withAppendedCardFromFields(
+            fields = fields,
+            timestampIso = MseSetParser.currentMseTimestamp(),
+            preserveExistingImageField = false,
+        )
+        setActiveArchiveInternal(current.copy(document = updatedDoc))
+        _hasUnsavedChanges.value = true
+        val newIdx = (updatedDoc.cards.size - 1).coerceAtLeast(0)
+        _activeCardIndex.value = newIdx
+        newIdx
+    }
+
+    /**
+     * Merges cards from an external `.mse-set` file into the currently open set (or Split-Off Set)
+     * as [importOrigin] (`ORIGINAL_OC_CARD` or `FAN_ALTERNATE_VARIANT`) without modifying any
+     * existing `CANON_ORIGINAL` cards. Preserves embedded art blobs ONLY for imported cards that
+     * already carried artwork; artless cards remain strictly `image == null`.
+     */
+    suspend fun mergeExternalMseSetIntoActive(
+        uri: Uri,
+        importOrigin: CardOrigin = CardOrigin.ORIGINAL_OC_CARD,
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val current = _archive.value ?: throw IllegalStateException("No active set open to merge into.")
+            val displayName = resolveDisplayName(uri) ?: "external.mse-set"
+            val stream = context.contentResolver.openInputStream(uri)
+                ?: throw IllegalStateException("Unable to open selected external .mse-set.")
+            val importedArchive = stream.use { MseSetParser.readArchive(it, displayName = displayName) }
+            val importedCards = importedArchive.document.cards
+            require(importedCards.isNotEmpty()) { "Selected .mse-set contains no cards." }
+
+            pushUndoSnapshot()
+            var doc = current.document
+            val blobs = current.embeddedBlobs.toMutableMap()
+            val nowIso = MseSetParser.currentMseTimestamp()
+            val safeOrigin = if (importOrigin == CardOrigin.CANON_ORIGINAL) {
+                CardOrigin.ORIGINAL_OC_CARD
+            } else {
+                importOrigin
+            }
+
+            importedCards.forEach { card ->
+                val fields = LinkedHashMap(card.allEditableFields)
+                fields[SetComparisonEngine.MSE_FIELD_CARD_ORIGIN] = safeOrigin.wireValue
+                fields.remove(SetComparisonEngine.MSE_FIELD_CANON_SOURCE_ID)
+                val oldImgKey = card.image
+                var preserveImg = false
+                if (!oldImgKey.isNullOrBlank()) {
+                    val imgBytes = importedArchive.embeddedBlobs[oldImgKey]
+                    if (imgBytes != null) {
+                        val newImgKey = nextAvailableImageEntryName(blobs.keys)
+                        blobs[newImgKey] = imgBytes
+                        fields["image"] = newImgKey
+                        preserveImg = true
+                    } else {
+                        fields.remove("image")
+                    }
+                } else {
+                    fields.remove("image")
+                }
+                doc = doc.withAppendedCardFromFields(
+                    fields = fields,
+                    timestampIso = nowIso,
+                    preserveExistingImageField = preserveImg,
+                )
+            }
+
+            setActiveArchiveInternal(current.copy(document = doc, embeddedBlobs = blobs))
+            _hasUnsavedChanges.value = true
+            importedCards.size
+        }
+    }
+
+    /**
+     * Applies interactive cross-game / Split-Off field remapping and optional target style switch
+     * while strictly keeping `CANON_ORIGINAL` cards intact and `image` untouched.
+     */
+    suspend fun applyDynamicFieldMapping(
+        fieldMapping: Map<String, String>,
+        targetFramework: UniversalCardFramework? = null,
+        discoveredStyle: DiscoveredStyle? = null,
+    ): MseSetArchive? = withContext(Dispatchers.IO) {
+        val current = _archive.value ?: return@withContext null
+        pushUndoSnapshot()
+        var doc = current.document.withRemappedCardFields(fieldMapping, skipCanonOriginals = true)
+        if (discoveredStyle != null) {
+            doc = doc.withTopLevelScalar("game", discoveredStyle.gameId)
+                .withTopLevelScalar("stylesheet", discoveredStyle.stylesheetId)
+            applyDiscoveredStyleSpec(discoveredStyle)
+        } else if (targetFramework != null) {
+            doc = doc.withTopLevelScalar(
+                "game",
+                FrameworkMseScaffoldGenerator.sanitizeMseId(targetFramework.upstreamMseGameId ?: targetFramework.id),
+            ).withTopLevelScalar(
+                "stylesheet",
+                FrameworkMseScaffoldGenerator.sanitizeMseId(targetFramework.upstreamMseStyleId ?: "standard"),
+            )
+            applyFrameworkStyleSpec(targetFramework)
+        }
+        val updated = current.copy(document = doc)
+        setActiveArchiveInternal(updated)
+        _hasUnsavedChanges.value = true
+        updated
+    }
+
     suspend fun updateCardFields(cardIndex: Int, updates: Map<String, String?>): MseSetArchive? =
         withContext(Dispatchers.IO) {
             val current = _archive.value ?: return@withContext null
             if (updates.isEmpty()) return@withContext current
+            // MANDATORY CANON LORE PRESERVATION GUARD: do not overwrite CANON_ORIGINAL cards directly
+            if (isCardProtectedCanon(cardIndex)) {
+                return@withContext null
+            }
             pushUndoSnapshot()
             var doc = current.document
             updates.forEach { (fieldKey, newValue) ->
@@ -417,7 +739,7 @@ class MseWorkspaceRepository(
             }
             doc = doc.withCardFieldUpdated(cardIndex, "time modified", MseSetParser.currentMseTimestamp())
             val updated = current.copy(document = doc)
-            _archive.value = updated
+            setActiveArchiveInternal(updated)
             _hasUnsavedChanges.value = true
             updated
         }
@@ -565,5 +887,6 @@ class MseWorkspaceRepository(
 
     companion object {
         private const val MAX_HISTORY_DEPTH = 50
+        const val CANON_PROTECTED_SENTINEL = -1
     }
 }

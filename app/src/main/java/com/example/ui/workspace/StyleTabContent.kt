@@ -61,6 +61,12 @@ import com.example.data.mse.MseStyleSpec
 import com.example.data.mse.MseTemplateCatalog
 import com.example.data.settings.PhysicalCardProfile
 import com.example.data.settings.StudioSettings
+import com.example.domain.frameworks.UniversalCardFramework
+import com.example.ui.frameworks.FrameworkCategoryFilterBar
+import com.example.ui.frameworks.FrameworkFilterChip
+import com.example.ui.frameworks.FrameworkSearchField
+import com.example.ui.frameworks.UniversalFrameworkCard
+import com.example.ui.frameworks.filterUniversalFrameworks
 import com.example.ui.welcome.StyleGalleryTile
 
 /**
@@ -76,16 +82,28 @@ fun StyleTabContent(
     settings: StudioSettings,
     discoveredGames: List<DiscoveredGame>,
     discoveredStyles: List<DiscoveredStyle>,
+    universalFrameworks: List<UniversalCardFramework> = emptyList(),
+    activeFramework: UniversalCardFramework? = null,
     catalogSyncState: CatalogSyncState,
     missingFontCount: Int,
     onRefreshCatalog: () -> Unit,
     onSwitchStylesheet: (DiscoveredStyle) -> Unit,
+    onSelectUniversalFramework: (UniversalCardFramework) -> Unit = {},
+    onGenerateFrameworkScaffold: (UniversalCardFramework) -> Unit = {},
+    onOpenFieldMapper: () -> Unit = {},
     onLoadStyleUri: (Uri) -> Unit,
     onUpdatePhysicalProfile: (PhysicalCardProfile) -> Unit,
     onOpenFontDropdown: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var showUniversalFrameworks by remember { mutableStateOf(false) }
+    var fwQuery by remember { mutableStateOf("") }
+    var fwCategoryChip by remember { mutableStateOf(FrameworkFilterChip.ALL) }
+
+    val filteredFrameworks = remember(universalFrameworks, fwQuery, fwCategoryChip) {
+        filterUniversalFrameworks(universalFrameworks, fwQuery, fwCategoryChip)
+    }
 
     val gameStyles = remember(archive.document.game, discoveredStyles, searchQuery) {
         val q = searchQuery.trim().lowercase()
@@ -246,6 +264,68 @@ fun StyleTabContent(
             }
         }
 
+        // ---- Mode Switcher: Installed MSE Frames vs 110+ Universal TCG Frameworks + Field Mapper ----
+        item(span = { GridItemSpan(2) }) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilterChip(
+                    selected = !showUniversalFrameworks,
+                    onClick = { showUniversalFrameworks = false },
+                    label = { Text("MSE Frames (${gameStyles.size})") },
+                    modifier = Modifier.testTag("style_mode_mse_frames"),
+                )
+                FilterChip(
+                    selected = showUniversalFrameworks,
+                    onClick = { showUniversalFrameworks = true },
+                    label = { Text("All TCG Frameworks (${universalFrameworks.size})") },
+                    modifier = Modifier.testTag("style_mode_universal_frameworks"),
+                )
+                OutlinedButton(
+                    onClick = onOpenFieldMapper,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.testTag("style_open_field_mapper"),
+                ) {
+                    Text("Field Mapper", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+
+        if (showUniversalFrameworks) {
+            item(span = { GridItemSpan(2) }) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FrameworkSearchField(
+                        query = fwQuery,
+                        totalCount = universalFrameworks.size,
+                        onQueryChange = { fwQuery = it },
+                    )
+                    FrameworkCategoryFilterBar(
+                        selectedChip = fwCategoryChip,
+                        onSelectChip = { fwCategoryChip = it },
+                    )
+                }
+            }
+            items(
+                items = filteredFrameworks,
+                span = { GridItemSpan(2) },
+                key = { "fw_${it.id}" },
+            ) { fw ->
+                val hasUpstream = fw.upstreamMseGameId != null && discoveredStyles.any {
+                    it.gameId.equals(fw.upstreamMseGameId, ignoreCase = true)
+                }
+                UniversalFrameworkCard(
+                    framework = fw,
+                    selected = activeFramework?.id == fw.id,
+                    hasInstalledUpstreamStyle = hasUpstream,
+                    onSelect = { onSelectUniversalFramework(fw) },
+                    onGenerateScaffold = { onGenerateFrameworkScaffold(fw) },
+                )
+            }
+        } else {
         // ---- Visual Frame Gallery Header + Search ----
         item(span = { GridItemSpan(2) }) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -331,6 +411,7 @@ fun StyleTabContent(
                     onClick = { onSwitchStylesheet(option) },
                 )
             }
+        }
         }
     }
 }

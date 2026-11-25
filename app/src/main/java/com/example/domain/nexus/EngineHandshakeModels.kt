@@ -90,6 +90,8 @@ data class HandshakeContract(
             "CARD_FRAME_DESCRIPTOR_MAPPING",
             "TURN_PHASE_AND_EFFECT_ENUMS",
             "20_COLOR_PIE_PIP_GRAMMAR",
+            "CUSTOM_CARD_USAGE_TELEMETRY_V1",
+            "SPLIT_OFF_CANON_PRESERVATION_V1",
         )
     }
 }

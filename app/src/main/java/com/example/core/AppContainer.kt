@@ -97,4 +97,21 @@ class AppContainer(context: Context) {
     val installedAppsBridge = com.example.data.nexus.InstalledAppsBridge(
         context = appContext,
     )
+
+    val officialSetSourcesRepository = com.example.data.official.OfficialSetSourcesRepository(
+        context = appContext,
+        okHttpClient = okHttpClient,
+        moshi = moshi,
+    )
+
+    val cardUsageReportRepository = com.example.data.telemetry.CardUsageReportRepository(
+        context = appContext,
+        okHttpClient = okHttpClient,
+        moshi = moshi,
+    )
+
+    val universalFrameworkRepository = com.example.data.frameworks.UniversalFrameworkRepository(
+        context = appContext,
+        moshi = moshi,
+    )
 }

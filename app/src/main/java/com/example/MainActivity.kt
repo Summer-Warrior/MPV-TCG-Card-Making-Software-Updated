@@ -2,6 +2,8 @@ package com.example
 
 import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -17,8 +19,10 @@ import com.example.core.TcgStudioApplication
 import com.example.ui.HubDeepLinkRequest
 import com.example.ui.StudioViewModel
 import com.example.ui.TcgStudioApp
+import com.example.ui.comparison.SetComparisonViewModel
 import com.example.ui.nexus.EngineSyncViewModel
 import com.example.ui.nexus.NexusHubViewModel
+import com.example.ui.telemetry.CardUsageReportsViewModel
 
 class MainActivity : ComponentActivity() {
     private var pendingHubDeepLink by mutableStateOf<HubDeepLinkRequest?>(null)
@@ -42,6 +46,12 @@ class MainActivity : ComponentActivity() {
             val engineSyncViewModel: EngineSyncViewModel = viewModel(
                 factory = EngineSyncViewModel.factory(container),
             )
+            val setComparisonViewModel: SetComparisonViewModel = viewModel(
+                factory = SetComparisonViewModel.factory(container),
+            )
+            val cardUsageReportsViewModel: CardUsageReportsViewModel = viewModel(
+                factory = CardUsageReportsViewModel.factory(container),
+            )
             val settings by studioViewModel.settings.collectAsStateWithLifecycle()
             LaunchedEffect(settings.darkTheme) {
                 if (settings.darkTheme) {
@@ -60,6 +70,8 @@ class MainActivity : ComponentActivity() {
                 viewModel = studioViewModel,
                 nexusHubViewModel = nexusHubViewModel,
                 engineSyncViewModel = engineSyncViewModel,
+                setComparisonViewModel = setComparisonViewModel,
+                cardUsageReportsViewModel = cardUsageReportsViewModel,
                 pendingHubDeepLink = pendingHubDeepLink,
                 onHubDeepLinkConsumed = { pendingHubDeepLink = null },
             )
@@ -76,6 +88,7 @@ class MainActivity : ComponentActivity() {
 
     private fun parseHubDeepLink(intent: Intent?): HubDeepLinkRequest? {
         if (intent == null) return null
+        val action = intent.action
         val uri = intent.data
         val isSchemeMatch = uri != null &&
             uri.scheme.equals("tcgstudio", ignoreCase = true) &&
@@ -91,16 +104,46 @@ class MainActivity : ComponentActivity() {
             exportParam.equals("true", ignoreCase = true) ||
             intent.getBooleanExtra("exportClientInfo", false)
 
+        val importUsageParam = uri?.getQueryParameter("importUsageReport")
+        val importUsageReport = importUsageParam == "1" ||
+            importUsageParam.equals("true", ignoreCase = true) ||
+            intent.getBooleanExtra("importUsageReport", false)
+
         val fromApp = uri?.getQueryParameter("from")?.trim()?.ifBlank { null }
             ?: intent.getStringExtra("from")?.trim()?.ifBlank { null }
 
-        if (!isSchemeMatch && !hubSync && !exportClientInfo && fromApp == null) {
+        val inlineJson = uri?.getQueryParameter("reportJson")?.trim()?.ifBlank { null }
+            ?: intent.getStringExtra("usageReportJson")?.trim()?.ifBlank { null }
+            ?: if (action == Intent.ACTION_SEND) {
+                intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.takeIf { it.startsWith("{") || it.startsWith("[") }
+            } else {
+                null
+            }
+
+        val streamUri: Uri? = when {
+            action == Intent.ACTION_SEND -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+            }
+            action == Intent.ACTION_VIEW && !isSchemeMatch && uri != null -> uri
+            else -> null
+        }
+
+        val hasUsagePayload = importUsageReport || inlineJson != null || streamUri != null
+        if (!isSchemeMatch && !hubSync && !exportClientInfo && !hasUsagePayload && fromApp == null) {
             return null
         }
         return HubDeepLinkRequest(
-            hubSync = hubSync || fromApp.equals("nexustcg", ignoreCase = true),
+            hubSync = hubSync || (!hasUsagePayload && fromApp.equals("nexustcg", ignoreCase = true)),
             exportClientInfo = exportClientInfo,
-            fromApp = fromApp,
+            importUsageReport = hasUsagePayload,
+            usageReportJson = inlineJson,
+            usageReportUri = streamUri,
+            fromApp = fromApp ?: if (action == Intent.ACTION_SEND || action == Intent.ACTION_VIEW) "nexustcg" else null,
         )
     }
 }

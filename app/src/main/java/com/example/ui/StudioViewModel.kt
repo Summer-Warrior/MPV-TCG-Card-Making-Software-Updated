@@ -24,11 +24,19 @@ import com.example.data.mse.MseSetInfo
 import com.example.data.mse.MseStyleSpec
 import com.example.data.mse.RecentSetRecord
 import com.example.data.mse.ResolvedOfflineFrame
+import com.example.data.mse.MseWorkspaceRepository
 import com.example.data.settings.EngineSplit
 import com.example.data.settings.PhysicalCardProfile
 import com.example.data.settings.StudioSettings
 import com.example.data.upstream.GitHubCommitCheckResult
 import com.example.data.upstream.UpstreamManifest
+import com.example.domain.comparison.CardOrigin
+import com.example.domain.comparison.ComparableCardRecord
+import com.example.domain.comparison.ComparableSet
+import com.example.domain.comparison.SetComparisonEngine
+import com.example.domain.comparison.SplitOffKind
+import com.example.domain.comparison.SplitOffSetManifest
+import com.example.domain.frameworks.UniversalCardFramework
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -39,6 +47,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -87,12 +96,25 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StudioSettings())
 
     val archive: StateFlow<MseSetArchive?> = container.mseWorkspaceRepository.archive
+    val splitOffManifest: StateFlow<SplitOffSetManifest?> = container.mseWorkspaceRepository.splitOffManifest
     val activeCardIndex: StateFlow<Int> = container.mseWorkspaceRepository.activeCardIndex
     val styleSpec: StateFlow<MseStyleSpec> = container.mseWorkspaceRepository.styleSpec
     val recentSets: StateFlow<List<RecentSetRecord>> = container.mseWorkspaceRepository.recentSets
     val hasUnsavedChanges: StateFlow<Boolean> = container.mseWorkspaceRepository.hasUnsavedChanges
     val canUndo: StateFlow<Boolean> = container.mseWorkspaceRepository.canUndo
     val canRedo: StateFlow<Boolean> = container.mseWorkspaceRepository.canRedo
+
+    val universalFrameworks: StateFlow<List<UniversalCardFramework>> =
+        container.universalFrameworkRepository.frameworks
+
+    val activeFramework: StateFlow<UniversalCardFramework?> = combine(
+        archive,
+        splitOffManifest,
+        universalFrameworks,
+    ) { arc, manifest, _ ->
+        val byManifest = container.universalFrameworkRepository.findById(manifest?.frameworkId)
+        byManifest ?: container.universalFrameworkRepository.findBestMatchForGame(arc?.document?.game)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val discoveredGames: StateFlow<List<DiscoveredGame>> = container.mseTemplateCatalogRepository.games
     val discoveredStyles: StateFlow<List<DiscoveredStyle>> = container.mseTemplateCatalogRepository.styles
@@ -519,6 +541,201 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun createNewSetFromFramework(
+        title: String,
+        framework: UniversalCardFramework,
+        onOpened: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            val matchedStyle = framework.upstreamMseGameId?.let { gameId ->
+                val styleId = framework.upstreamMseStyleId
+                if (!styleId.isNullOrBlank()) {
+                    container.mseTemplateCatalogRepository.findStyle(gameId, styleId)
+                } else {
+                    discoveredStyles.value.firstOrNull { it.gameId.equals(gameId, ignoreCase = true) }
+                }
+            }
+            if (matchedStyle != null) {
+                container.settingsRepository.updateEngineSplit(matchedStyle.engineSplit)
+                container.settingsRepository.updatePhysicalProfile(matchedStyle.physicalProfile)
+            } else {
+                val profile = if (framework.cardWidthMm <= 60.0) {
+                    PhysicalCardProfile.JAPANESE_59X86
+                } else {
+                    PhysicalCardProfile.STANDARD_63X88
+                }
+                container.settingsRepository.updatePhysicalProfile(profile)
+            }
+            container.mseWorkspaceRepository.createNewSetFromFramework(
+                title = title,
+                framework = framework,
+                matchedDiscoveredStyle = matchedStyle,
+            )
+            _renderState.value = CardRenderState.Idle
+            resolveOfflineBaseFrameForStyle(matchedStyle)
+            _messages.tryEmit("Created '${title.ifBlank { framework.effectiveShortName }}' using ${framework.name} framework.")
+            onOpened()
+            if (_bridgeHealth.value is BridgeHealthState.Online) {
+                requestBridgeRender()
+            }
+        }
+    }
+
+    fun createFanFictionSplitOffSet(
+        officialSet: ComparableSet,
+        splitOffTitle: String,
+        splitOffKind: SplitOffKind,
+        divergenceNotes: String,
+        targetFramework: UniversalCardFramework? = null,
+        onOpened: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            val resolvedFramework = targetFramework
+                ?: container.universalFrameworkRepository.findBestMatchForGame(officialSet.gameId)
+            val matchedStyle = resolvedFramework?.upstreamMseGameId?.let { gameId ->
+                val styleId = resolvedFramework.upstreamMseStyleId
+                if (!styleId.isNullOrBlank()) {
+                    container.mseTemplateCatalogRepository.findStyle(gameId, styleId)
+                } else {
+                    discoveredStyles.value.firstOrNull { it.gameId.equals(gameId, ignoreCase = true) }
+                }
+            }
+            container.mseWorkspaceRepository.createFanFictionSplitOffSet(
+                officialSet = officialSet,
+                splitOffTitle = splitOffTitle,
+                splitOffKind = splitOffKind,
+                divergenceNotes = divergenceNotes,
+                targetFramework = resolvedFramework,
+                discoveredStyle = matchedStyle,
+            )
+            _renderState.value = CardRenderState.Idle
+            resolveOfflineBaseFrameForStyle(matchedStyle)
+            _messages.tryEmit(
+                "Created Split-Off Set '${splitOffTitle.ifBlank { officialSet.setName }}' with ${officialSet.cards.size}/${officialSet.cards.size} Canon Original cards preserved (art strictly blank)."
+            )
+            onOpened()
+            if (_bridgeHealth.value is BridgeHealthState.Online) {
+                requestBridgeRender()
+            }
+        }
+    }
+
+    fun generateAndValidateFrameworkScaffold(framework: UniversalCardFramework) {
+        viewModelScope.launch {
+            container.universalFrameworkRepository.generateCustomTemplateScaffold(framework)
+                .onSuccess { generated ->
+                    _messages.tryEmit(
+                        "Generated custom_templates/${generated.scaffold.gameFolderName} & ${generated.scaffold.styleFolderName}."
+                    )
+                    if (_bridgeHealth.value is BridgeHealthState.Online) {
+                        validateTemplateOnBridge(
+                            templateId = generated.scaffold.styleFolderName,
+                            styleSource = generated.scaffold.styleFileContent,
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _messages.tryEmit("Scaffold generation failed: ${err.message}")
+                }
+        }
+    }
+
+    fun applyFrameworkToActiveSet(framework: UniversalCardFramework) {
+        viewModelScope.launch {
+            val matchedStyle = framework.upstreamMseGameId?.let { gameId ->
+                val styleId = framework.upstreamMseStyleId
+                if (!styleId.isNullOrBlank()) {
+                    container.mseTemplateCatalogRepository.findStyle(gameId, styleId)
+                } else {
+                    discoveredStyles.value.firstOrNull { it.gameId.equals(gameId, ignoreCase = true) }
+                }
+            }
+            container.mseWorkspaceRepository.applyDynamicFieldMapping(
+                fieldMapping = emptyMap(),
+                targetFramework = framework,
+                discoveredStyle = matchedStyle,
+            )
+            resolveOfflineBaseFrameForStyle(matchedStyle)
+            _messages.tryEmit("Switched workspace framework to ${framework.name}.")
+        }
+    }
+
+    fun applyDynamicFieldMapping(
+        fieldMapping: Map<String, String>,
+        targetFramework: UniversalCardFramework?,
+        discoveredStyle: DiscoveredStyle?,
+    ) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.applyDynamicFieldMapping(
+                fieldMapping = fieldMapping,
+                targetFramework = targetFramework,
+                discoveredStyle = discoveredStyle,
+            )
+            if (discoveredStyle != null) {
+                resolveOfflineBaseFrameForStyle(discoveredStyle)
+            }
+            _messages.tryEmit("Applied field mapping (${fieldMapping.size} field(s) mapped; Canon Originals preserved).")
+        }
+    }
+
+    fun mergeExternalMseSetUri(uri: Uri, importOrigin: CardOrigin = CardOrigin.ORIGINAL_OC_CARD) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.mergeExternalMseSetIntoActive(uri, importOrigin)
+                .onSuccess { count ->
+                    _messages.tryEmit("Merged $count card(s) as ${importOrigin.displayLabel} (Canon Originals untouched).")
+                }
+                .onFailure { err ->
+                    _messages.tryEmit("Merge failed: ${err.message}")
+                }
+        }
+    }
+
+    fun copyOfficialReferenceBaseline(
+        officialCard: ComparableCardRecord,
+        origin: CardOrigin = CardOrigin.FAN_ALTERNATE_VARIANT,
+    ) {
+        viewModelScope.launch {
+            val idx = container.mseWorkspaceRepository.copyOfficialReferenceBaselineCard(officialCard, origin)
+            if (idx >= 0) {
+                _messages.tryEmit("Copied '${officialCard.name}' metadata baseline to active set (art remains blank).")
+            } else {
+                _messages.tryEmit("Open or create a set first to copy a reference baseline card.")
+            }
+        }
+    }
+
+    fun branchAlternateLoreVariant(canonCardIndex: Int) {
+        viewModelScope.launch {
+            container.mseWorkspaceRepository.branchAlternateLoreVariant(canonCardIndex)
+            syncVariantSelectionToCurrentCard()
+            _messages.tryEmit("Branched editable Fan Alternate Lore Variant alongside preserved Canon Original.")
+            if (_bridgeHealth.value is BridgeHealthState.Online) {
+                requestBridgeRender()
+            }
+        }
+    }
+
+    /**
+     * Jumps directly to a card in the active `.mse-set` from Telemetry Reports ("Edit Card in 1:1 Studio").
+     * Returns true if found and selected.
+     */
+    fun selectCardByTelemetryMatch(cardId: String, cardName: String): Boolean {
+        val cards = archive.value?.document?.cards ?: return false
+        val normName = SetComparisonEngine.normalizeName(cardName)
+        val idx = cards.indexOfFirst { card ->
+            card.canonSourceId.equals(cardId, ignoreCase = true) ||
+                card.field("passcode").equals(cardId, ignoreCase = true) ||
+                card.field("register 21 digit").equals(cardId, ignoreCase = true) ||
+                SetComparisonEngine.normalizeName(card.name) == normName
+        }
+        return if (idx >= 0) {
+            selectCard(idx)
+            true
+        } else {
+            false
+        }
+    }
+
     fun openMseSetUri(uri: Uri, onOpened: () -> Unit = {}) {
         viewModelScope.launch {
             val result = container.mseWorkspaceRepository.openSetFromUri(uri)
@@ -669,7 +886,13 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
 
     fun deleteCard(cardIndex: Int) {
         viewModelScope.launch {
-            container.mseWorkspaceRepository.deleteCard(cardIndex)
+            val resultIdx = container.mseWorkspaceRepository.deleteCard(cardIndex)
+            if (resultIdx == MseWorkspaceRepository.CANON_PROTECTED_SENTINEL) {
+                _messages.tryEmit(
+                    "Canon Original cards are protected in Split-Off Sets. Tap 'Branch Alternate Lore Variant' to create an editable variant."
+                )
+                return@launch
+            }
             syncVariantSelectionToCurrentCard()
             _messages.tryEmit("Deleted card.")
             if (_bridgeHealth.value is BridgeHealthState.Online) {
@@ -680,8 +903,15 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
 
     fun updateActiveCardFields(updates: Map<String, String?>) {
         viewModelScope.launch {
+            val activeIdx = activeCardIndex.value
+            if (container.mseWorkspaceRepository.isCardProtectedCanon(activeIdx)) {
+                _messages.tryEmit(
+                    "Canon Original card is read-only to preserve official lore. Use 'Branch Alternate Lore Variant' to customize."
+                )
+                return@launch
+            }
             container.mseWorkspaceRepository.updateCardFields(
-                cardIndex = activeCardIndex.value,
+                cardIndex = activeIdx,
                 updates = updates,
             )
             syncVariantSelectionToCurrentCard()
