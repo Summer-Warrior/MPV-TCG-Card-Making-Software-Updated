@@ -7,8 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.core.AppContainer
 import com.example.data.telemetry.UsagePullSummary
 import com.example.domain.comparison.CardOrigin
+import com.example.domain.telemetry.CardUsageAnalysisResult
 import com.example.domain.telemetry.CardUsageAnalyzer
-import com.example.domain.telemetry.CardUsageDashboardSummary
 import com.example.domain.telemetry.CustomCardUsageReport
 import com.example.domain.telemetry.TelemetryInteractionType
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -28,7 +28,7 @@ data class CardUsageReportsUiState(
     val searchQuery: String = "",
     val isPullingFromGitHub: Boolean = false,
     val lastPullSummary: UsagePullSummary? = null,
-    val dashboard: CardUsageDashboardSummary = CardUsageAnalyzer.analyze(emptyList()),
+    val dashboard: CardUsageAnalysisResult = CardUsageAnalyzer.analyze(emptyList()),
 )
 
 /**
@@ -61,7 +61,7 @@ class CardUsageReportsViewModel(
         val rawDashboard = CardUsageAnalyzer.analyze(
             reports = reports,
             originFilter = originFilter,
-            interactionFilter = interactionFilter,
+            interactionTypeFilter = interactionFilter,
         )
         val trimmed = query.trim().lowercase()
         val filteredDashboard = if (trimmed.isEmpty()) {
@@ -114,7 +114,7 @@ class CardUsageReportsViewModel(
         }
         viewModelScope.launch {
             _isPulling.value = true
-            val manifest = container.nexusHubRepository.manifest.value
+            val manifest = container.nexusHubRepository.loadManifest()
             val repos = listOf(
                 manifest.linkedGameEngineRepo to manifest.linkedGameEngineBranch,
                 manifest.linkedHubRepo to manifest.linkedHubBranch,

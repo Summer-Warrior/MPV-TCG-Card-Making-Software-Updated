@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items as lazyListItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -62,11 +64,18 @@ import com.example.data.mse.CatalogPackFilter
 import com.example.data.mse.CatalogSyncState
 import com.example.data.mse.DiscoveredGame
 import com.example.data.mse.DiscoveredStyle
+import com.example.domain.frameworks.UniversalCardFramework
+import com.example.ui.frameworks.FrameworkCategoryFilterBar
+import com.example.ui.frameworks.FrameworkFilterChip
+import com.example.ui.frameworks.FrameworkSearchField
+import com.example.ui.frameworks.UniversalFrameworkCard
+import com.example.ui.frameworks.filterUniversalFrameworks
 
 /**
  * Authentic Magic Set Editor Visual "New Set" Browser:
- * - Search bar ("Search games or frames...") + Pack filter chips (All Packs, Magic, Non-Magic, Beta, Outdated)
- * - Step 1: Visual 2-column Game Gallery displaying ALL discovered `.mse-game` games with real MSE thumbnails
+ * - Source toggle: MSE Packs (real `.mse-game`/`.mse-style`) | Universal Card Frameworks (110+ physical & digital TCGs)
+ * - Search bar ("Search games or frames...") + Pack/Category filter chips
+ * - Step 1: Visual 2-column Game Gallery or 110+ Universal TCG Framework selector
  * - Step 2: Visual 2-column Card Style Gallery displaying ALL `.mse-style` frames with real MSE icon previews
  */
 @Composable
@@ -78,12 +87,22 @@ fun NewSetWizardDialog(
     onToggleOptInPack: (CatalogPackFilter, Boolean) -> Unit,
     onDismiss: () -> Unit,
     onCreateSet: (title: String, gameId: String, styleOption: DiscoveredStyle) -> Unit,
+    universalFrameworks: List<UniversalCardFramework> = emptyList(),
+    onCreateSetFromFramework: (title: String, framework: UniversalCardFramework) -> Unit = { _, _ -> },
+    onGenerateFrameworkScaffold: (UniversalCardFramework) -> Unit = {},
 ) {
     var step by remember { mutableIntStateOf(1) }
+    var useUniversalFrameworks by remember { mutableStateOf(false) }
+    var frameworkCategoryChip by remember { mutableStateOf(FrameworkFilterChip.ALL) }
+    var selectedFramework by remember(universalFrameworks) { mutableStateOf(universalFrameworks.firstOrNull()) }
     var searchQuery by remember { mutableStateOf("") }
     var packFilter by remember { mutableStateOf(CatalogPackFilter.ALL) }
     var selectedGame by remember(games) { mutableStateOf(games.firstOrNull()) }
     var setTitle by remember { mutableStateOf("") }
+
+    val filteredFrameworks = remember(universalFrameworks, searchQuery, frameworkCategoryChip) {
+        filterUniversalFrameworks(universalFrameworks, searchQuery, frameworkCategoryChip)
+    }
 
     val styleCountByGame = remember(styles) {
         styles.groupingBy { it.gameId.lowercase() }.eachCount()
@@ -212,6 +231,96 @@ fun NewSetWizardDialog(
                     }
                 }
 
+                // ---- Source Toggle (MSE Packs vs 110+ Universal TCG Frameworks) ----
+                if (step == 1 && universalFrameworks.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = !useUniversalFrameworks,
+                            onClick = { useUniversalFrameworks = false },
+                            label = { Text("MSE Packs (${games.size})", style = MaterialTheme.typography.labelMedium) },
+                            modifier = Modifier.testTag("wizard_source_mse_packs"),
+                        )
+                        FilterChip(
+                            selected = useUniversalFrameworks,
+                            onClick = { useUniversalFrameworks = true },
+                            label = { Text("All ${universalFrameworks.size} TCG Frameworks", style = MaterialTheme.typography.labelMedium) },
+                            modifier = Modifier.testTag("wizard_source_universal_frameworks"),
+                        )
+                    }
+                }
+
+                if (step == 1 && useUniversalFrameworks && universalFrameworks.isNotEmpty()) {
+                    OutlinedTextField(
+                        value = setTitle,
+                        onValueChange = { setTitle = it },
+                        label = { Text("Set Title (optional)") },
+                        placeholder = { Text(selectedFramework?.effectiveShortName ?: "Untitled Set") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("wizard_framework_set_title_input"),
+                    )
+
+                    FrameworkSearchField(
+                        query = searchQuery,
+                        totalCount = universalFrameworks.size,
+                        onQueryChange = { searchQuery = it },
+                    )
+
+                    FrameworkCategoryFilterBar(
+                        selectedChip = frameworkCategoryChip,
+                        onSelectChip = { frameworkCategoryChip = it },
+                    )
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 2.dp),
+                    ) {
+                        lazyListItems(filteredFrameworks, key = { it.id }) { fw ->
+                            val hasUpstream = fw.upstreamMseGameId != null &&
+                                styles.any { it.gameId.equals(fw.upstreamMseGameId, ignoreCase = true) }
+                            UniversalFrameworkCard(
+                                framework = fw,
+                                selected = fw.id == selectedFramework?.id,
+                                hasInstalledUpstreamStyle = hasUpstream,
+                                onSelect = { selectedFramework = fw },
+                                onGenerateScaffold = { onGenerateFrameworkScaffold(fw) },
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                    ) {
+                        OutlinedButton(onClick = onDismiss) {
+                            Text("Cancel")
+                        }
+                        Button(
+                            enabled = selectedFramework != null,
+                            onClick = {
+                                val fw = selectedFramework ?: return@Button
+                                onCreateSetFromFramework(
+                                    setTitle.trim().ifEmpty { "${fw.effectiveShortName} Set" },
+                                    fw,
+                                )
+                            },
+                            modifier = Modifier.testTag("wizard_create_framework_set_button"),
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Create Set")
+                        }
+                    }
+                } else {
                 // ---- Search Bar ----
                 OutlinedTextField(
                     value = searchQuery,
@@ -382,6 +491,7 @@ fun NewSetWizardDialog(
                             Text("Create Set")
                         }
                     }
+                }
                 }
             }
         }

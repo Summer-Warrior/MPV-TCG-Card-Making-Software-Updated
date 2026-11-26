@@ -66,15 +66,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.domain.comparison.CardOrigin
 import com.example.domain.nexus.MutualLinkStatus
 import com.example.domain.nexus.NexusClientDefinition
 import com.example.domain.nexus.NexusHubChangelogDiff
 import com.example.domain.nexus.NexusRepoLinkManifest
+import com.example.domain.telemetry.TelemetryInteractionType
+import com.example.ui.telemetry.CardUsageReportsContent
+import com.example.ui.telemetry.CardUsageReportsUiState
 import com.example.ui.theme.StatusOfflineAmber
 import com.example.ui.theme.StatusConnected
 
 const val NEXUS_TAB_HUB_LINK = 0
 const val NEXUS_TAB_ENGINE_SYNC = 1
+const val NEXUS_TAB_USAGE_REPORTS = 5
 
 private enum class NexusHubSection(val label: String) {
     SYNC_LINK("Hub Link"),
@@ -82,6 +87,7 @@ private enum class NexusHubSection(val label: String) {
     FRAME_REVIEW("Frame Review"),
     CLIENTS("Clients"),
     CODER_EXPORT("Card Coder"),
+    USAGE_REPORTS("Usage Reports"),
 }
 
 @Composable
@@ -114,6 +120,15 @@ fun NexusHubSyncScreen(
     onWriteFileToUri: (Context, Uri, String, String) -> Unit,
     viewModel: NexusHubViewModel,
     onNotify: (String) -> Unit,
+    usageReportsState: CardUsageReportsUiState = CardUsageReportsUiState(),
+    hasActiveSetOpen: Boolean = false,
+    onPullUsageReports: (String) -> Unit = {},
+    onImportUsageReportUri: (Uri) -> Unit = {},
+    onSelectUsageOriginFilter: (CardOrigin?) -> Unit = {},
+    onSelectUsageInteractionFilter: (TelemetryInteractionType?) -> Unit = {},
+    onUsageSearchQueryChanged: (String) -> Unit = {},
+    onEditTelemetryCardInStudio: (String, String) -> Unit = { _, _ -> },
+    onBranchTelemetryCardVariant: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -308,6 +323,21 @@ fun NexusHubSyncScreen(
                         uiState.generatedLuaPreview?.let { copyToClipboard("Lua Script", it) }
                     },
                     onCommitPackToHub = onCommitPackToHub,
+                )
+            }
+
+            NexusHubSection.USAGE_REPORTS -> {
+                CardUsageReportsContent(
+                    uiState = usageReportsState,
+                    githubPat = uiState.fineGrainedPat,
+                    hasActiveSetOpen = hasActiveSetOpen,
+                    onPullFromGitHub = onPullUsageReports,
+                    onImportFromUri = onImportUsageReportUri,
+                    onSelectOriginFilter = onSelectUsageOriginFilter,
+                    onSelectInteractionFilter = onSelectUsageInteractionFilter,
+                    onSearchQueryChanged = onUsageSearchQueryChanged,
+                    onEditCardInStudio = onEditTelemetryCardInStudio,
+                    onBranchCardVariant = onBranchTelemetryCardVariant,
                 )
             }
         }

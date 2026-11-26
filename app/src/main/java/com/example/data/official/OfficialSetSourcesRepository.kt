@@ -36,7 +36,7 @@ import java.security.MessageDigest
  * Also parses real local files selected via Android SAF (`OpenDocument`):
  * - `.mse-set` ZIP archives (via lossless [MseSetParser])
  * - Yu-Gi-Oh! / ProjectIgnis / DataEditorX SQLite `.cdb` databases (`datas` + `texts` tables)
- * - Card-Forge `cardsfolder/*.txt` scripts
+ * - Card-Forge `cardsfolder` `.txt` scripts
  * - Nexus Hub / MPV JSON Card Packs & ComparableSet JSON files
  *
  * STRICT INVARIANT: All pulled official cards keep `image == null` so no copyrighted artwork

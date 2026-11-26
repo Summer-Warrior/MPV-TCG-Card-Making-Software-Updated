@@ -548,14 +548,15 @@ fun SetComparisonScreen(
     }
 
     // ---- Fan-Fiction / Custom Split-Off Set Wizard Dialog ----
-    if (showSplitOffWizard && loadedOfficial != null) {
+    val officialForWizard = uiState.selectedOfficialSet
+    if (showSplitOffWizard && officialForWizard != null) {
         FanFictionSplitOffWizardDialog(
-            officialSet = loadedOfficial,
+            officialSet = officialForWizard,
             frameworks = universalFrameworks,
             onDismiss = { showSplitOffWizard = false },
             onConfirmCreate = { title, kind, notes, fw ->
                 showSplitOffWizard = false
-                onCreateSplitOffSet(loadedOfficial, title, kind, notes, fw)
+                onCreateSplitOffSet(officialForWizard, title, kind, notes, fw)
             },
         )
     }

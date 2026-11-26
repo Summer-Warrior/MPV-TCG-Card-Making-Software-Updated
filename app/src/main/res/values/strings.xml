@@ -90,4 +90,13 @@
     <string name="connectivity_offline">Offline Mode</string>
     <string name="upstream_offline_gate_banner">Offline Mode — Original Magic Set Editor &amp; DataEditorX update comparisons are paused until officially online. Both offline UIs remain 100% functional.</string>
     <string name="upstream_online_ready_banner">Officially Online — Ready to compare original Magic Set Editor &amp; DataEditorX upstream repositories via ETag/Atom.</string>
+
+    <!-- Official Set Puller, Fan-Fiction Split-Off Sets, Usage Telemetry & Universal Frameworks -->
+    <string name="welcome_official_sets_title">Official Sets, Compare &amp; Split-Off</string>
+    <string name="welcome_official_sets_desc">Pull real MTG, Yu-Gi-Oh!, Pokémon &amp; local files, diff sets, or fork Fan-Fiction Split-Offs</string>
+    <string name="welcome_usage_reports_title">Custom Card Usage &amp; Telemetry</string>
+    <string name="welcome_usage_reports_desc">Inspect play/win rates, Canon vs. OC interactions &amp; jump to edit in 1:1 Studio</string>
+    <string name="split_off_compare_parent">Compare vs. Parent</string>
+    <string name="usage_reports_title">Card Usage &amp; Telemetry</string>
+    <string name="universal_frameworks_label">Universal TCG Frameworks</string>
 </resources>

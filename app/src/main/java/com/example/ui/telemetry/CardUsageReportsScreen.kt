@@ -55,7 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.domain.comparison.CardOrigin
 import com.example.domain.telemetry.AggregatedCardUsageRow
-import com.example.domain.telemetry.CardInteractionMetric
+import com.example.domain.telemetry.AggregatedInteractionRow
 import com.example.domain.telemetry.TelemetryBadgeKind
 import com.example.domain.telemetry.TelemetryInteractionType
 import com.example.ui.theme.StatusConnected
@@ -127,7 +127,7 @@ fun CardUsageReportsContent(
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                text = "${dashboard.reportCount} report(s) • ${dashboard.totalMatchesTracked} matches • Deduplicated by reportId",
+                                text = "${dashboard.totalReportsCount} report(s) • ${dashboard.totalMatchesTracked} matches • Deduplicated by reportId",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -178,7 +178,7 @@ fun CardUsageReportsContent(
         }
 
         // ---- Origin Comparison Summary Strip (Canon Original vs Fan Variant vs Original OC) ----
-        if (dashboard.reportCount > 0) {
+        if (dashboard.totalReportsCount > 0) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
@@ -212,7 +212,7 @@ fun CardUsageReportsContent(
                                         fontWeight = FontWeight.Bold,
                                     )
                                     Text(
-                                        text = "${summary.distinctCards} cards • ${summary.totalPlays} plays",
+                                        text = "${summary.uniqueCards} cards • ${summary.totalPlays} plays",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -233,14 +233,14 @@ fun CardUsageReportsContent(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                text = "Canon ↔ OC Interactions: ${dashboard.canonVsOcInteractionCount}",
+                                text = "Canon ↔ OC Interactions: ${dashboard.canonToOcInteractionCount}",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Text(
-                                text = "Canon ↔ AU: ${dashboard.canonVsAlternateInteractionCount} • Errors: ${dashboard.totalScriptErrors}",
+                                text = "Canon ↔ AU: ${dashboard.canonToVariantInteractionCount} • Errors: ${dashboard.totalErrorEvents}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (dashboard.totalScriptErrors > 0) StatusOfflineAmber
+                                color = if (dashboard.totalErrorEvents > 0) StatusOfflineAmber
                                 else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -317,7 +317,7 @@ fun CardUsageReportsContent(
             }
         }
 
-        if (dashboard.reportCount == 0) {
+        if (dashboard.totalReportsCount == 0) {
             item {
                 Surface(
                     shape = MaterialTheme.shapes.medium,
@@ -447,8 +447,8 @@ private fun TelemetryCardRowItem(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     row.badges.forEach { badge ->
-                        val isAlert = badge.kind == TelemetryBadgeKind.SCRIPT_ERRORS ||
-                            badge.kind == TelemetryBadgeKind.OVERPERFORMING
+                        val isAlert = badge == TelemetryBadgeKind.SCRIPT_OR_RULE_ERROR ||
+                            badge == TelemetryBadgeKind.HIGH_WIN_RATE_OUTLIER
                         Surface(
                             shape = RoundedCornerShape(6.dp),
                             color = if (isAlert) StatusOfflineAmberContainer else StatusConnectedContainer,
@@ -497,8 +497,8 @@ private fun TelemetryCardRowItem(
 }
 
 @Composable
-private fun InteractionRowCard(interaction: CardInteractionMetric) {
-    val typeEnum = TelemetryInteractionType.fromWire(interaction.interactionType)
+private fun InteractionRowCard(interaction: AggregatedInteractionRow) {
+    val typeEnum = interaction.interactionType
     val isError = typeEnum == TelemetryInteractionType.RULE_VALIDATION_ERROR ||
         typeEnum == TelemetryInteractionType.SCRIPT_EXCEPTION ||
         typeEnum == TelemetryInteractionType.STACK_CONFLICT
@@ -541,7 +541,7 @@ private fun InteractionRowCard(interaction: CardInteractionMetric) {
                     )
                 }
                 Text(
-                    text = "×${interaction.occurrenceCount}",
+                    text = "×${interaction.totalOccurrences}",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
@@ -549,7 +549,7 @@ private fun InteractionRowCard(interaction: CardInteractionMetric) {
             }
 
             Text(
-                text = "${typeEnum.displayLabel} • ${CardOrigin.fromWire(interaction.sourceCardOrigin).displayLabel} ↔ ${CardOrigin.fromWire(interaction.targetCardOrigin).displayLabel}" +
+                text = "${typeEnum.displayLabel} • ${interaction.sourceOrigin.displayLabel} ↔ ${interaction.targetOrigin.displayLabel}" +
                     if (interaction.phase.isNotBlank()) " • Phase: ${interaction.phase}" else "",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

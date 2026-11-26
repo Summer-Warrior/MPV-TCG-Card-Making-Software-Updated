@@ -37,16 +37,22 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import com.example.ui.coder.DataEditorXWorkbenchScreen
+import com.example.ui.comparison.SetComparisonScreen
+import com.example.ui.comparison.SetComparisonViewModel
 import com.example.ui.diagnostics.BridgeDiagnosticsScreen
 import com.example.ui.diagnostics.BridgeDiagnosticsSheet
 import com.example.ui.fonts.FontsScreen
 import com.example.ui.nexus.AlignmentWarningDialog
 import com.example.ui.nexus.EngineSyncViewModel
 import com.example.ui.nexus.NEXUS_TAB_ENGINE_SYNC
+import com.example.ui.nexus.NEXUS_TAB_USAGE_REPORTS
 import com.example.ui.nexus.NexusHubSyncScreen
 import com.example.ui.nexus.NexusHubViewModel
+import com.example.ui.telemetry.CardUsageReportsContent
+import com.example.ui.telemetry.CardUsageReportsViewModel
 import com.example.ui.theme.TcgStudioTheme
 import com.example.ui.upstream.UpstreamScreen
 import com.example.ui.welcome.ModeChooserScreen
@@ -57,6 +63,9 @@ import kotlinx.coroutines.launch
 data class HubDeepLinkRequest(
     val hubSync: Boolean = false,
     val exportClientInfo: Boolean = false,
+    val importUsageReport: Boolean = false,
+    val usageReportJson: String? = null,
+    val usageReportUri: Uri? = null,
     val fromApp: String? = null,
 )
 
@@ -69,6 +78,8 @@ object StudioRoutes {
     const val UPSTREAM = "mse_upstream"
     const val BRIDGE = "mse_bridge"
     const val NEXUS_HUB = "mse_nexus_hub"
+    const val SET_COMPARISON = "mse_set_comparison"
+    const val USAGE_REPORTS = "mse_usage_reports"
 }
 
 /**
@@ -81,6 +92,8 @@ fun TcgStudioApp(
     viewModel: StudioViewModel,
     nexusHubViewModel: NexusHubViewModel,
     engineSyncViewModel: EngineSyncViewModel,
+    setComparisonViewModel: SetComparisonViewModel,
+    cardUsageReportsViewModel: CardUsageReportsViewModel,
     pendingHubDeepLink: HubDeepLinkRequest? = null,
     onHubDeepLinkConsumed: () -> Unit = {},
 ) {
@@ -111,6 +124,11 @@ fun TcgStudioApp(
     val isValidatingTemplate by viewModel.isValidatingTemplate.collectAsStateWithLifecycle()
     val nexusHubState by nexusHubViewModel.uiState.collectAsStateWithLifecycle()
     val engineSyncState by engineSyncViewModel.uiState.collectAsStateWithLifecycle()
+    val splitOffManifest by viewModel.splitOffManifest.collectAsStateWithLifecycle()
+    val universalFrameworks by viewModel.universalFrameworks.collectAsStateWithLifecycle()
+    val activeFramework by viewModel.activeFramework.collectAsStateWithLifecycle()
+    val comparisonState by setComparisonViewModel.uiState.collectAsStateWithLifecycle()
+    val usageReportsState by cardUsageReportsViewModel.uiState.collectAsStateWithLifecycle()
 
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -118,6 +136,32 @@ fun TcgStudioApp(
     var showBridgeSheet by remember { mutableStateOf(false) }
     var requestedHubTabIndex by remember { mutableStateOf<Int?>(null) }
     var pendingAutoSync by remember { mutableStateOf(false) }
+
+    fun openWorkspace() {
+        navController.navigate(StudioRoutes.WORKSPACE) {
+            launchSingleTop = true
+        }
+    }
+
+    fun jumpToTelemetryCard(cardId: String, cardName: String, branchVariant: Boolean) {
+        if (archive == null) {
+            uiScope.launch {
+                snackbarHostState.showSnackbar("Open a set containing '$cardName' first to edit or branch it in 1:1 Studio.")
+            }
+            return
+        }
+        val matched = viewModel.selectCardByTelemetryMatch(cardId, cardName)
+        if (!matched) {
+            uiScope.launch {
+                snackbarHostState.showSnackbar("'$cardName' was not found in the active set. Open its .mse-set to edit.")
+            }
+            return
+        }
+        if (branchVariant) {
+            viewModel.branchAlternateLoreVariant(viewModel.activeCardIndex.value)
+        }
+        openWorkspace()
+    }
 
     fun copyPlainText(label: String, text: String, snackbarMessage: String) {
         val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -148,6 +192,16 @@ fun TcgStudioApp(
         }
         launch {
             engineSyncViewModel.messages.collect { message ->
+                snackbarHostState.showSnackbar(message)
+            }
+        }
+        launch {
+            setComparisonViewModel.messages.collect { message ->
+                snackbarHostState.showSnackbar(message)
+            }
+        }
+        launch {
+            cardUsageReportsViewModel.messages.collect { message ->
                 snackbarHostState.showSnackbar(message)
             }
         }
@@ -191,9 +245,26 @@ fun TcgStudioApp(
         )
     }
 
-    // Handle tcgstudio://nexus-hub?hubSync=1&exportClientInfo=1&from=nexustcg
+    // Handle tcgstudio://nexus-hub?hubSync=1&exportClientInfo=1&importUsageReport=1&from=nexustcg
     LaunchedEffect(pendingHubDeepLink) {
         val req = pendingHubDeepLink ?: return@LaunchedEffect
+        if (req.importUsageReport) {
+            val sourceLabel = req.fromApp ?: "NexusTCG"
+            when {
+                !req.usageReportJson.isNullOrBlank() ->
+                    cardUsageReportsViewModel.importReportJson(req.usageReportJson, sourceLabel)
+                req.usageReportUri != null ->
+                    cardUsageReportsViewModel.importReportFromUri(req.usageReportUri)
+                else ->
+                    cardUsageReportsViewModel.pullReportsFromGitHub(nexusHubState.fineGrainedPat)
+            }
+            requestedHubTabIndex = NEXUS_TAB_USAGE_REPORTS
+            navController.navigate(StudioRoutes.USAGE_REPORTS) {
+                launchSingleTop = true
+            }
+            onHubDeepLinkConsumed()
+            return@LaunchedEffect
+        }
         if (req.hubSync) {
             pendingAutoSync = true
             requestedHubTabIndex = NEXUS_TAB_ENGINE_SYNC
@@ -217,12 +288,6 @@ fun TcgStudioApp(
             launchSingleTop = true
         }
         onHubDeepLinkConsumed()
-    }
-
-    fun openWorkspace() {
-        navController.navigate(StudioRoutes.WORKSPACE) {
-            launchSingleTop = true
-        }
     }
 
     TcgStudioTheme(darkTheme = settings.darkTheme) {
@@ -264,6 +329,8 @@ fun TcgStudioApp(
                         onOpenBridgeSheet = { showBridgeSheet = true },
                         onOpenBridgeSetup = { navController.navigate(StudioRoutes.BRIDGE) },
                         onOpenNexusHub = { navController.navigate(StudioRoutes.NEXUS_HUB) },
+                        onOpenOfficialSetComparison = { navController.navigate(StudioRoutes.SET_COMPARISON) },
+                        onOpenUsageReports = { navController.navigate(StudioRoutes.USAGE_REPORTS) },
                     )
                 }
 
@@ -310,6 +377,17 @@ fun TcgStudioApp(
                         onOpenBridgeSetup = { navController.navigate(StudioRoutes.BRIDGE) },
                         nexusLinkStatus = nexusHubState.linkStatus,
                         onOpenNexusHub = { navController.navigate(StudioRoutes.NEXUS_HUB) },
+                        universalFrameworks = universalFrameworks,
+                        onCreateSetFromFramework = { title, framework ->
+                            viewModel.createNewSetFromFramework(
+                                title = title,
+                                framework = framework,
+                                onOpened = ::openWorkspace,
+                            )
+                        },
+                        onGenerateFrameworkScaffold = viewModel::generateAndValidateFrameworkScaffold,
+                        onOpenOfficialSetComparison = { navController.navigate(StudioRoutes.SET_COMPARISON) },
+                        onOpenUsageReports = { navController.navigate(StudioRoutes.USAGE_REPORTS) },
                     )
                 }
 
@@ -384,6 +462,44 @@ fun TcgStudioApp(
                             onApplyReadyFont = viewModel::applyReadyFont,
                             onDownloadOpenFont = viewModel::downloadAndApplyOpenFont,
                             onImportPurchasedFont = viewModel::importPurchasedFontUri,
+                            splitOffManifest = splitOffManifest,
+                            universalFrameworks = universalFrameworks,
+                            activeFramework = activeFramework,
+                            usageReportsState = usageReportsState,
+                            githubPat = nexusHubState.fineGrainedPat,
+                            onBranchAlternateLoreVariant = viewModel::branchAlternateLoreVariant,
+                            onOpenSetComparison = {
+                                setComparisonViewModel.recomputeComparison(activeArchive, splitOffManifest)
+                                navController.navigate(StudioRoutes.SET_COMPARISON)
+                            },
+                            onCompareWithParentOfficialSet = { manifest ->
+                                setComparisonViewModel.compareWithParentOfficialSet(manifest, activeArchive)
+                                navController.navigate(StudioRoutes.SET_COMPARISON)
+                            },
+                            onMergeExternalMseSetUri = viewModel::mergeExternalMseSetUri,
+                            onApplyDynamicFieldMapping = { mapping, targetFw ->
+                                val matchedStyle = targetFw?.upstreamMseGameId?.let { gId ->
+                                    discoveredStyles.firstOrNull {
+                                        it.gameId.equals(gId, ignoreCase = true) &&
+                                            (targetFw.upstreamMseStyleId.isNullOrBlank() ||
+                                                it.stylesheetId.equals(targetFw.upstreamMseStyleId, ignoreCase = true))
+                                    }
+                                }
+                                viewModel.applyDynamicFieldMapping(mapping, targetFw, matchedStyle)
+                            },
+                            onSelectUniversalFramework = viewModel::applyFrameworkToActiveSet,
+                            onGenerateFrameworkScaffold = viewModel::generateAndValidateFrameworkScaffold,
+                            onPullUsageReports = cardUsageReportsViewModel::pullReportsFromGitHub,
+                            onImportUsageReportUri = cardUsageReportsViewModel::importReportFromUri,
+                            onSelectUsageOriginFilter = cardUsageReportsViewModel::setOriginFilter,
+                            onSelectUsageInteractionFilter = cardUsageReportsViewModel::setInteractionFilter,
+                            onUsageSearchQueryChanged = cardUsageReportsViewModel::setSearchQuery,
+                            onEditTelemetryCardInStudio = { id, name ->
+                                jumpToTelemetryCard(id, name, branchVariant = false)
+                            },
+                            onBranchTelemetryCardVariant = { id, name ->
+                                jumpToTelemetryCard(id, name, branchVariant = true)
+                            },
                         )
                     }
                 }
@@ -519,6 +635,87 @@ fun TcgStudioApp(
                             viewModel = nexusHubViewModel,
                             onNotify = { msg ->
                                 uiScope.launch { snackbarHostState.showSnackbar(msg) }
+                            },
+                            usageReportsState = usageReportsState,
+                            hasActiveSetOpen = archive != null,
+                            onPullUsageReports = cardUsageReportsViewModel::pullReportsFromGitHub,
+                            onImportUsageReportUri = cardUsageReportsViewModel::importReportFromUri,
+                            onSelectUsageOriginFilter = cardUsageReportsViewModel::setOriginFilter,
+                            onSelectUsageInteractionFilter = cardUsageReportsViewModel::setInteractionFilter,
+                            onUsageSearchQueryChanged = cardUsageReportsViewModel::setSearchQuery,
+                            onEditTelemetryCardInStudio = { id, name ->
+                                jumpToTelemetryCard(id, name, branchVariant = false)
+                            },
+                            onBranchTelemetryCardVariant = { id, name ->
+                                jumpToTelemetryCard(id, name, branchVariant = true)
+                            },
+                        )
+                    }
+                }
+
+                composable(StudioRoutes.SET_COMPARISON) {
+                    ToolScreenScaffold(
+                        title = "Official Sets & Split-Offs",
+                        onBack = { navController.popBackStack() },
+                    ) {
+                        SetComparisonScreen(
+                            uiState = comparisonState,
+                            activeArchive = archive,
+                            splitOffManifest = splitOffManifest,
+                            universalFrameworks = universalFrameworks,
+                            isDeviceOnline = isDeviceOnline,
+                            onSelectSourceTab = setComparisonViewModel::selectSourceTab,
+                            onSearchQueryChanged = setComparisonViewModel::updateSearchQuery,
+                            onCustomOpenUrlChanged = setComparisonViewModel::updateCustomOpenUrl,
+                            onRefreshSets = { setComparisonViewModel.loadSetsForTab() },
+                            onSelectOfficialSet = { summary ->
+                                setComparisonViewModel.loadOfficialSetCards(summary, archive, splitOffManifest)
+                            },
+                            onLoadLocalFileUri = { uri ->
+                                setComparisonViewModel.loadLocalReferenceFile(uri, archive, splitOffManifest)
+                            },
+                            onLoadOpenResourceUrl = { url ->
+                                setComparisonViewModel.loadOpenResourceUrl(url, archive, splitOffManifest)
+                            },
+                            onRecomputeComparison = {
+                                setComparisonViewModel.recomputeComparison(archive, splitOffManifest)
+                            },
+                            onCopyReferenceBaseline = { officialCard ->
+                                viewModel.copyOfficialReferenceBaseline(officialCard)
+                            },
+                            onCreateSplitOffSet = { officialSet, title, kind, notes, targetFramework ->
+                                viewModel.createFanFictionSplitOffSet(
+                                    officialSet = officialSet,
+                                    splitOffTitle = title,
+                                    splitOffKind = kind,
+                                    divergenceNotes = notes,
+                                    targetFramework = targetFramework,
+                                    onOpened = ::openWorkspace,
+                                )
+                            },
+                        )
+                    }
+                }
+
+                composable(StudioRoutes.USAGE_REPORTS) {
+                    ToolScreenScaffold(
+                        title = "Card Usage & Telemetry",
+                        onBack = { navController.popBackStack() },
+                    ) {
+                        CardUsageReportsContent(
+                            uiState = usageReportsState,
+                            githubPat = nexusHubState.fineGrainedPat,
+                            hasActiveSetOpen = archive != null,
+                            onPullFromGitHub = cardUsageReportsViewModel::pullReportsFromGitHub,
+                            onImportFromUri = cardUsageReportsViewModel::importReportFromUri,
+                            onSelectOriginFilter = cardUsageReportsViewModel::setOriginFilter,
+                            onSelectInteractionFilter = cardUsageReportsViewModel::setInteractionFilter,
+                            onSearchQueryChanged = cardUsageReportsViewModel::setSearchQuery,
+                            onEditCardInStudio = { id, name ->
+                                jumpToTelemetryCard(id, name, branchVariant = false)
+                            },
+                            onBranchCardVariant = { id, name ->
+                                jumpToTelemetryCard(id, name, branchVariant = true)
                             },
                         )
                     }

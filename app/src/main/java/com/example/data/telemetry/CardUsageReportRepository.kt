@@ -89,17 +89,16 @@ class CardUsageReportRepository(
 
     /**
      * Parses a single [CustomCardUsageReport] JSON object or JSON array of reports,
-     * deduplicates by `reportId`, and persists locally.
+     * supporting both canonical keys (`cardStats`, `interactions`) and NexusTCG
+     * `CardUsageTelemetryTracker` keys (`cardMetrics`, `interactionMetrics`,
+     * `sourceCardOrigin`, `targetCardOrigin`, `occurrenceCount`), deduplicates by
+     * `reportId`, and persists locally.
      */
     suspend fun importReportJson(rawJson: String): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
             val trimmed = rawJson.trim()
             require(trimmed.isNotEmpty()) { "Telemetry report JSON is empty." }
-            val parsedList = if (trimmed.startsWith("[")) {
-                reportListAdapter.fromJson(trimmed).orEmpty()
-            } else {
-                listOfNotNull(singleReportAdapter.fromJson(trimmed))
-            }.filter { it.reportId.isNotBlank() }
+            val parsedList = parseReportPayload(trimmed)
 
             require(parsedList.isNotEmpty()) {
                 "JSON did not match CustomCardUsageReport schema (missing reportId)."
@@ -232,12 +231,12 @@ class CardUsageReportRepository(
     }
 
     private fun parseReportPayload(rawJson: String): List<CustomCardUsageReport> {
-        val trimmed = rawJson.trim()
+        val normalized = normalizeTelemetryReportJson(rawJson) ?: return emptyList()
         return runCatching {
-            if (trimmed.startsWith("[")) {
-                reportListAdapter.fromJson(trimmed).orEmpty()
+            if (normalized.startsWith("[")) {
+                reportListAdapter.fromJson(normalized).orEmpty()
             } else {
-                listOfNotNull(singleReportAdapter.fromJson(trimmed))
+                listOfNotNull(singleReportAdapter.fromJson(normalized))
             }
         }.getOrDefault(emptyList()).filter { it.reportId.isNotBlank() }
     }
@@ -248,5 +247,93 @@ class CardUsageReportRepository(
 
     companion object {
         private const val GITHUB_API_VERSION = "2026-03-10"
+
+        /**
+         * Normalizes telemetry JSON from either canonical (`cardStats` / `interactions`)
+         * or NexusTCG `CardUsageTelemetryTracker` (`cardMetrics` / `interactionMetrics` /
+         * `sourceCardOrigin` / `targetCardOrigin` / `occurrenceCount`) formats into a
+         * consistent JSON representation for Moshi deserialization.
+         */
+        internal fun normalizeTelemetryReportJson(rawJson: String): String? {
+            val trimmed = rawJson.trim()
+            if (trimmed.isEmpty()) return null
+            return runCatching {
+                if (trimmed.startsWith("[")) {
+                    val arr = JSONArray(trimmed)
+                    val out = JSONArray()
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        out.put(normalizeReportObject(obj))
+                    }
+                    out.toString()
+                } else {
+                    val root = JSONObject(trimmed)
+                    val wrappedReports = root.optJSONArray("reports")
+                    if (wrappedReports != null && !root.has("reportId")) {
+                        val out = JSONArray()
+                        for (i in 0 until wrappedReports.length()) {
+                            val obj = wrappedReports.optJSONObject(i) ?: continue
+                            out.put(normalizeReportObject(obj))
+                        }
+                        out.toString()
+                    } else {
+                        normalizeReportObject(root).toString()
+                    }
+                }
+            }.getOrNull()
+        }
+
+        private fun normalizeReportObject(obj: JSONObject): JSONObject {
+            val copy = JSONObject(obj.toString())
+
+            // Accept NexusTCG CardUsageTelemetryTracker's `cardMetrics` alongside `cardStats`
+            val cardStatsArr = copy.optJSONArray("cardStats")
+            val cardMetricsArr = copy.optJSONArray("cardMetrics")
+            val resolvedCards = when {
+                cardStatsArr != null && cardStatsArr.length() > 0 -> cardStatsArr
+                cardMetricsArr != null -> cardMetricsArr
+                else -> cardStatsArr ?: JSONArray()
+            }
+            val normalizedCards = JSONArray()
+            for (i in 0 until resolvedCards.length()) {
+                val c = resolvedCards.optJSONObject(i) ?: continue
+                val cCopy = JSONObject(c.toString())
+                if (!cCopy.has("cardOrigin") && cCopy.has("origin")) {
+                    cCopy.put("cardOrigin", cCopy.optString("origin"))
+                }
+                normalizedCards.put(cCopy)
+            }
+            copy.put("cardStats", normalizedCards)
+
+            // Accept NexusTCG CardUsageTelemetryTracker's `interactionMetrics` alongside `interactions`
+            val interactionsArr = copy.optJSONArray("interactions")
+            val interactionMetricsArr = copy.optJSONArray("interactionMetrics")
+            val resolvedInteractions = when {
+                interactionsArr != null && interactionsArr.length() > 0 -> interactionsArr
+                interactionMetricsArr != null -> interactionMetricsArr
+                else -> interactionsArr ?: JSONArray()
+            }
+            val normalizedInteractions = JSONArray()
+            for (i in 0 until resolvedInteractions.length()) {
+                val ix = resolvedInteractions.optJSONObject(i) ?: continue
+                val ixCopy = JSONObject(ix.toString())
+                if (!ixCopy.has("sourceCardOrigin") && ixCopy.has("sourceOrigin")) {
+                    ixCopy.put("sourceCardOrigin", ixCopy.optString("sourceOrigin"))
+                }
+                if (!ixCopy.has("targetCardOrigin") && ixCopy.has("targetOrigin")) {
+                    ixCopy.put("targetCardOrigin", ixCopy.optString("targetOrigin"))
+                }
+                if (!ixCopy.has("occurrenceCount")) {
+                    when {
+                        ixCopy.has("totalOccurrences") -> ixCopy.put("occurrenceCount", ixCopy.optInt("totalOccurrences", 1))
+                        ixCopy.has("count") -> ixCopy.put("occurrenceCount", ixCopy.optInt("count", 1))
+                    }
+                }
+                normalizedInteractions.put(ixCopy)
+            }
+            copy.put("interactions", normalizedInteractions)
+
+            return copy
+        }
     }
 }

@@ -107,8 +107,8 @@ fun StatsTabContent(
                     onClick = { subTab = 1 },
                     label = {
                         Text(
-                            if (usageReportsState.dashboard.reportCount > 0) {
-                                "Usage (${usageReportsState.dashboard.reportCount})"
+                            if (usageReportsState.dashboard.totalReportsCount > 0) {
+                                "Usage (${usageReportsState.dashboard.totalReportsCount})"
                             } else {
                                 "Usage & Interactions"
                             }

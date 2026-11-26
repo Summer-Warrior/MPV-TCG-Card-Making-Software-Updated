@@ -28,10 +28,12 @@ import androidx.compose.material.icons.filled.AddBox
 import androidx.compose.material.icons.filled.AutoAwesomeMosaic
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FontDownload
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Style
@@ -65,6 +67,7 @@ import com.example.data.mse.DiscoveredGame
 import com.example.data.mse.DiscoveredStyle
 import com.example.data.mse.MseTemplateCatalog
 import com.example.data.mse.RecentSetRecord
+import com.example.domain.frameworks.UniversalCardFramework
 import com.example.domain.nexus.MutualLinkStatus
 import com.example.ui.BridgeHealthState
 import com.example.ui.components.BridgeStatusPill
@@ -97,6 +100,11 @@ fun WelcomeScreen(
     onOpenBridgeSetup: () -> Unit,
     nexusLinkStatus: MutualLinkStatus = MutualLinkStatus.UNLINKED,
     onOpenNexusHub: () -> Unit = {},
+    universalFrameworks: List<UniversalCardFramework> = emptyList(),
+    onCreateSetFromFramework: (title: String, framework: UniversalCardFramework) -> Unit = { _, _ -> },
+    onGenerateFrameworkScaffold: (UniversalCardFramework) -> Unit = {},
+    onOpenOfficialSetComparison: () -> Unit = {},
+    onOpenUsageReports: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var showNewSetWizard by remember { mutableStateOf(false) }
@@ -313,6 +321,30 @@ fun WelcomeScreen(
             }
         }
 
+        // ---- Official Sets, Comparison & Fan-Fiction Split-Off Sets ----
+        item {
+            WelcomeActionCard(
+                icon = Icons.Default.CompareArrows,
+                title = stringResource(R.string.welcome_official_sets_title),
+                subtitle = stringResource(R.string.welcome_official_sets_desc),
+                emphasized = false,
+                onClick = onOpenOfficialSetComparison,
+                modifier = Modifier.testTag("welcome_official_sets_card"),
+            )
+        }
+
+        // ---- Custom Card Usage & Interaction Telemetry Reports ----
+        item {
+            WelcomeActionCard(
+                icon = Icons.Default.Insights,
+                title = stringResource(R.string.welcome_usage_reports_title),
+                subtitle = stringResource(R.string.welcome_usage_reports_desc),
+                emphasized = false,
+                onClick = onOpenUsageReports,
+                modifier = Modifier.testTag("welcome_usage_reports_card"),
+            )
+        }
+
         // ---- Secondary Tools Row ----
         item {
             Spacer(Modifier.height(2.dp))
@@ -439,6 +471,12 @@ fun WelcomeScreen(
                 showNewSetWizard = false
                 onCreateNewSet(title, gameId, styleOption)
             },
+            universalFrameworks = universalFrameworks,
+            onCreateSetFromFramework = { title, framework ->
+                showNewSetWizard = false
+                onCreateSetFromFramework(title, framework)
+            },
+            onGenerateFrameworkScaffold = onGenerateFrameworkScaffold,
         )
     }
 }

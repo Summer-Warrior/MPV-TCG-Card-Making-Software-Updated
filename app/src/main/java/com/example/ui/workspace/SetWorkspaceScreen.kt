@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,15 +28,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SaveAs
 import androidx.compose.material.icons.filled.Style
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Tune
@@ -43,6 +49,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,10 +85,17 @@ import com.example.data.mse.MseTemplateCatalog
 import com.example.data.mse.ResolvedOfflineFrame
 import com.example.data.settings.PhysicalCardProfile
 import com.example.data.settings.StudioSettings
+import com.example.domain.comparison.CardOrigin
+import com.example.domain.comparison.SplitOffSetManifest
+import com.example.domain.frameworks.UniversalCardFramework
+import com.example.domain.telemetry.TelemetryInteractionType
 import com.example.ui.BridgeHealthState
 import com.example.ui.CardRenderState
 import com.example.ui.components.BridgeStatusDotButton
 import com.example.ui.fonts.FontDropdownBottomSheet
+import com.example.ui.telemetry.CardUsageReportsUiState
+import com.example.ui.theme.StatusConnected
+import com.example.ui.theme.StatusConnectedContainer
 import com.example.ui.theme.StatusOfflineAmber
 import java.io.File
 
@@ -153,6 +167,25 @@ fun SetWorkspaceScreen(
     onApplyReadyFont: (FontEntry) -> Unit,
     onDownloadOpenFont: (FontEntry) -> Unit,
     onImportPurchasedFont: (Uri, String) -> Unit,
+    splitOffManifest: SplitOffSetManifest? = null,
+    universalFrameworks: List<UniversalCardFramework> = emptyList(),
+    activeFramework: UniversalCardFramework? = null,
+    usageReportsState: CardUsageReportsUiState = CardUsageReportsUiState(),
+    githubPat: String = "",
+    onBranchAlternateLoreVariant: (Int) -> Unit = {},
+    onOpenSetComparison: () -> Unit = {},
+    onCompareWithParentOfficialSet: (SplitOffSetManifest) -> Unit = {},
+    onMergeExternalMseSetUri: (Uri, CardOrigin) -> Unit = { _, _ -> },
+    onApplyDynamicFieldMapping: (Map<String, String>, UniversalCardFramework?) -> Unit = { _, _ -> },
+    onSelectUniversalFramework: (UniversalCardFramework) -> Unit = {},
+    onGenerateFrameworkScaffold: (UniversalCardFramework) -> Unit = {},
+    onPullUsageReports: (String) -> Unit = {},
+    onImportUsageReportUri: (Uri) -> Unit = {},
+    onSelectUsageOriginFilter: (CardOrigin?) -> Unit = {},
+    onSelectUsageInteractionFilter: (TelemetryInteractionType?) -> Unit = {},
+    onUsageSearchQueryChanged: (String) -> Unit = {},
+    onEditTelemetryCardInStudio: (String, String) -> Unit = { _, _ -> },
+    onBranchTelemetryCardVariant: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -160,6 +193,7 @@ fun SetWorkspaceScreen(
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showCalibrationSheet by remember { mutableStateOf(false) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
+    var showFieldMapperDialog by remember { mutableStateOf(false) }
 
     val missingFontCount = remember(fonts) {
         fonts.count { it.detectedMissingInTemplate && !it.availability.isReady }
@@ -186,6 +220,12 @@ fun SetWorkspaceScreen(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri: Uri? ->
         if (uri != null) onLoadStyleUri(uri)
+    }
+
+    val mergeExternalSetLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri != null) onMergeExternalMseSetUri(uri, CardOrigin.ORIGINAL_OC_CARD)
     }
 
     val handleBackNavigation = {
@@ -373,6 +413,31 @@ fun SetWorkspaceScreen(
                         )
                         HorizontalDivider()
                         DropdownMenuItem(
+                            text = { Text("Compare Set vs. Official…") },
+                            leadingIcon = { Icon(Icons.Default.CompareArrows, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                onOpenSetComparison()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Merge External .mse-set…") },
+                            leadingIcon = { Icon(Icons.Default.MergeType, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                mergeExternalSetLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Style Field Mapper…") },
+                            leadingIcon = { Icon(Icons.Default.SwapHoriz, contentDescription = null) },
+                            onClick = {
+                                showOverflowMenu = false
+                                showFieldMapperDialog = true
+                            },
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
                             text = { Text("Switch to Card Coder (DataEditorX)") },
                             leadingIcon = { Icon(Icons.Default.Code, contentDescription = null) },
                             onClick = {
@@ -488,6 +553,57 @@ fun SetWorkspaceScreen(
             }
         }
 
+        // ---- Split-Off Set Lineage Banner (Canon Lore Preservation Guarantee) ----
+        if (splitOffManifest != null) {
+            val preservedCanonNow = remember(archive.document.cards) {
+                archive.document.cards.count { it.isCanonOriginal }
+            }
+            val expectedCanon = splitOffManifest.preservedCanonCardCount
+            val isIntact = preservedCanonNow >= expectedCanon
+            Surface(
+                color = if (isIntact) StatusConnectedContainer.copy(alpha = 0.72f) else MaterialTheme.colorScheme.errorContainer,
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (isIntact) StatusConnected.copy(alpha = 0.55f) else MaterialTheme.colorScheme.error,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("workspace_split_off_banner"),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AccountTree,
+                        contentDescription = "Split-Off Set Lineage",
+                        tint = if (isIntact) StatusConnected else MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = "Split from: ${splitOffManifest.parentOfficialSetName} • $preservedCanonNow/$expectedCanon Canon Kept",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    FilledTonalButton(
+                        onClick = { onCompareWithParentOfficialSet(splitOffManifest) },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier
+                            .height(30.dp)
+                            .testTag("workspace_compare_parent_button"),
+                    ) {
+                        Text("Compare vs. Parent", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+
         // ---- Active MSE Tab Content ----
         Box(modifier = Modifier.weight(1f)) {
             when (MseWorkspaceTab.entries[selectedTabIndex]) {
@@ -495,6 +611,8 @@ fun SetWorkspaceScreen(
                     CardsTabContent(
                         settings = settings,
                         archive = archive,
+                        splitOffManifest = splitOffManifest,
+                        activeFramework = activeFramework,
                         activeCardIndex = activeCardIndex,
                         styleSpec = styleSpec,
                         activeDiscoveredStyle = activeDiscoveredStyle,
@@ -510,6 +628,7 @@ fun SetWorkspaceScreen(
                         onAddBlankCard = onAddBlankCard,
                         onDuplicateCard = onDuplicateCard,
                         onDeleteCard = onDeleteCard,
+                        onBranchAlternateLoreVariant = onBranchAlternateLoreVariant,
                         onUpdateCardFields = onUpdateCardFields,
                         onEmbedCroppedArt = onEmbedCroppedArt,
                         onClearCardArt = onClearCardArt,
@@ -533,10 +652,15 @@ fun SetWorkspaceScreen(
                         settings = settings,
                         discoveredGames = discoveredGames,
                         discoveredStyles = discoveredStyles,
+                        universalFrameworks = universalFrameworks,
+                        activeFramework = activeFramework,
                         catalogSyncState = catalogSyncState,
                         missingFontCount = missingFontCount,
                         onRefreshCatalog = onRefreshCatalog,
                         onSwitchStylesheet = onSwitchStylesheet,
+                        onSelectUniversalFramework = onSelectUniversalFramework,
+                        onGenerateFrameworkScaffold = onGenerateFrameworkScaffold,
+                        onOpenFieldMapper = { showFieldMapperDialog = true },
                         onLoadStyleUri = onLoadStyleUri,
                         onUpdatePhysicalProfile = onUpdatePhysicalProfile,
                         onOpenFontDropdown = { showFontSheet = true },
@@ -553,10 +677,41 @@ fun SetWorkspaceScreen(
                 }
 
                 MseWorkspaceTab.STATS -> {
-                    StatsTabContent(archive = archive)
+                    StatsTabContent(
+                        archive = archive,
+                        usageReportsState = usageReportsState,
+                        githubPat = githubPat,
+                        onOpenSetComparison = onOpenSetComparison,
+                        onPullUsageReports = onPullUsageReports,
+                        onImportUsageReportUri = onImportUsageReportUri,
+                        onSelectUsageOriginFilter = onSelectUsageOriginFilter,
+                        onSelectUsageInteractionFilter = onSelectUsageInteractionFilter,
+                        onUsageSearchQueryChanged = onUsageSearchQueryChanged,
+                        onEditTelemetryCardInStudio = { cardId, cardName ->
+                            onEditTelemetryCardInStudio(cardId, cardName)
+                            selectedTabIndex = MseWorkspaceTab.CARDS.ordinal
+                        },
+                        onBranchTelemetryCardVariant = { cardId, cardName ->
+                            onBranchTelemetryCardVariant(cardId, cardName)
+                            selectedTabIndex = MseWorkspaceTab.CARDS.ordinal
+                        },
+                    )
                 }
             }
         }
+    }
+
+    if (showFieldMapperDialog) {
+        StyleFieldMapperDialog(
+            archive = archive,
+            frameworks = universalFrameworks,
+            initialTargetFramework = activeFramework,
+            onDismiss = { showFieldMapperDialog = false },
+            onApplyMapping = { fieldMapping, targetFramework ->
+                showFieldMapperDialog = false
+                onApplyDynamicFieldMapping(fieldMapping, targetFramework)
+            },
+        )
     }
 
     if (showFontSheet) {

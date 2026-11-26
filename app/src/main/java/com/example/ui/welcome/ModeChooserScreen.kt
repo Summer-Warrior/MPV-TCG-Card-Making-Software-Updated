@@ -26,8 +26,10 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
@@ -107,6 +109,8 @@ fun ModeChooserScreen(
     onOpenBridgeSheet: () -> Unit,
     onOpenBridgeSetup: () -> Unit,
     onOpenNexusHub: () -> Unit,
+    onOpenOfficialSetComparison: () -> Unit = {},
+    onOpenUsageReports: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -327,6 +331,51 @@ fun ModeChooserScreen(
                         Spacer(Modifier.width(6.dp))
                         Text(
                             text = "Termux Bridge",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onOpenOfficialSetComparison,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("mode_chooser_official_sets_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CompareArrows,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Official Sets & Split-Off",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onOpenUsageReports,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("mode_chooser_usage_reports_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Insights,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Card Usage Reports",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.labelMedium,

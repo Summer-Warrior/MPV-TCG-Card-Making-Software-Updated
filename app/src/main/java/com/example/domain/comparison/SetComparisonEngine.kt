@@ -13,7 +13,7 @@ import kotlin.math.roundToInt
  * 2. Mandatory Canon Lore Preservation auditing (`preserveAllOriginalOfficialCards == true`)
  * 3. Balance, Cost Curve, Stat-to-Cost bracket comparison, and Outlier / Power-Creep flags
  * 4. Metadata-only reference baseline copying (STRICTLY keeping `image == null`)
- * 5. Real Card-Forge `cardsfolder/*.txt` parser and dynamic Style Field Mapping
+ * 5. Real Card-Forge `cardsfolder` `.txt` parser and dynamic Style Field Mapping
  *
  * Zero Android UI / Compose imports.
  */
@@ -490,7 +490,7 @@ object SetComparisonEngine {
     }
 
     /**
-     * Parses real Card-Forge `cardsfolder/*.txt` script files into a [ComparableCardRecord].
+     * Parses real Card-Forge `cardsfolder` `.txt` script files into a [ComparableCardRecord].
      */
     fun parseForgeCardText(rawText: String, fileName: String = "forge_card.txt"): ComparableCardRecord? {
         val lines = rawText.replace("\r\n", "\n").split("\n")
