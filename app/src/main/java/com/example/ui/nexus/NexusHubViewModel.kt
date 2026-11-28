@@ -2,10 +2,12 @@ package com.example.ui.nexus
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.core.AppContainer
+import com.example.data.nexus.EngineSyncRepository
 import com.example.data.nexus.GitHubCommitResult
 import com.example.data.nexus.HubHandshakeResult
 import com.example.data.nexus.NexusHubBridgeService
@@ -84,6 +86,7 @@ data class NexusHubUiState(
 class NexusHubViewModel(
     private val repository: NexusHubRepository,
     private val bridgeService: NexusHubBridgeService,
+    private val engineSyncRepository: EngineSyncRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(NexusHubUiState())
@@ -112,8 +115,153 @@ class NexusHubViewModel(
                 )
             }
             recomputeValidation()
-            // Automatically run ETag-cached mutual link check on app open (offline-safe)
-            verifyMutualLinkAndCheckHub(silent = true)
+            // STRICT LOCAL-FIRST HANDSHAKE: Never poll GitHub automatically on app open.
+            verifyLocalFilesHandshake(silent = true)
+        }
+    }
+
+    /**
+     * 100% offline local-file handshake verification:
+     * Validates local `nexus-repo-link.json`, local `client-codestring-index.json`, and
+     * local `handshake-contract.json` for schema validity and Master Hub repo alignment.
+     * Makes ZERO network calls.
+     */
+    fun verifyLocalFilesHandshake(silent: Boolean = false) {
+        viewModelScope.launch {
+            val manifest = repository.loadManifest()
+            val appliedIndex = repository.loadAppliedIndex()
+            val contract = engineSyncRepository.loadContract()
+
+            val manifestVal = NexusSchemaValidator.validateRepoLinkManifest(manifest)
+            val indexVal = NexusSchemaValidator.validateClientIndex(appliedIndex)
+
+            val errors = mutableListOf<String>()
+            if (manifestVal is SchemaValidationResult.Invalid) errors += manifestVal.errors
+            if (indexVal is SchemaValidationResult.Invalid) errors += indexVal.errors
+
+            val reposAligned = manifest.linkedHubRepo.equals(contract.masterHubRepo, ignoreCase = true) &&
+                manifest.linkedHubRepo.equals(appliedIndex.hubRepo, ignoreCase = true)
+            val hasWritableClient = appliedIndex.clients.any { !it.upstreamSourceLock }
+
+            val (status, detail) = when {
+                errors.isNotEmpty() -> MutualLinkStatus.UNLINKED to
+                    "Local handshake file schema error: ${errors.first()}"
+                !reposAligned -> MutualLinkStatus.LINKED_OUT_OF_SYNC to
+                    "Local files out of sync: nexus-repo-link (${manifest.linkedHubRepo}), contract (${contract.masterHubRepo}), index (${appliedIndex.hubRepo})."
+                !hasWritableClient -> MutualLinkStatus.UNLINKED to
+                    "Local client-codestring-index.json has no non-locked writable clients."
+                else -> MutualLinkStatus.LINKED_AND_CURRENT to
+                    "Verified locally from device files (0 network calls) — ${manifest.linkedHubRepo} • ${appliedIndex.clients.size} client(s) • rev ${appliedIndex.indexRevision}."
+            }
+
+            val result = HubHandshakeResult(
+                status = status,
+                detail = detail,
+                thisRepoHasManifest = manifestVal is SchemaValidationResult.Valid,
+                hubRepoHasManifest = reposAligned,
+                hubPointsBackToThisRepo = reposAligned && errors.isEmpty(),
+                pulledIndex = null,
+                changelogDiff = null,
+                checkedAtIso = currentUtcIso(),
+            )
+
+            _uiState.update { state ->
+                state.copy(
+                    manifest = manifest,
+                    appliedIndex = appliedIndex,
+                    isCheckingHub = false,
+                    hasCheckedHubLink = true,
+                    linkStatus = status,
+                    lastHandshake = result,
+                )
+            }
+            if (!silent) {
+                _messages.tryEmit(detail)
+            }
+        }
+    }
+
+    /**
+     * Imports a local `nexus-repo-link.json` or `client-codestring-index.json` via Android SAF,
+     * validates it with `NexusSchemaValidator`, persists locally, and re-runs local verification.
+     */
+    fun importLocalHandshakeFileUri(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            val rawText = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        stream.readBytes().toString(Charsets.UTF_8)
+                    }
+                }.onFailure { err ->
+                    Log.w("NexusHubViewModel", "Failed reading local hub handshake URI: ${err.message}", err)
+                }.getOrNull()
+            }
+            if (rawText.isNullOrBlank()) {
+                _messages.tryEmit("Could not read selected local handshake JSON file.")
+                return@launch
+            }
+
+            val looksLikeManifest = rawText.contains("\"linkedHubRepo\"") || rawText.contains("\"thisRepo\"")
+            val looksLikeIndex = rawText.contains("\"clients\"") &&
+                (rawText.contains("\"indexRevision\"") || rawText.contains("\"hubRepo\""))
+
+            if (looksLikeManifest) {
+                val parsed = repository.parseManifestJson(rawText)
+                if (parsed == null) {
+                    _messages.tryEmit("Invalid nexus-repo-link.json file.")
+                    return@launch
+                }
+                when (val validation = NexusSchemaValidator.validateRepoLinkManifest(parsed)) {
+                    is SchemaValidationResult.Invalid -> {
+                        _messages.tryEmit("Rejected manifest: ${validation.errors.first()}")
+                    }
+                    is SchemaValidationResult.Valid -> {
+                        repository.saveManifest(parsed)
+                        _uiState.update { it.copy(manifest = parsed) }
+                        verifyLocalFilesHandshake(silent = true)
+                        _messages.tryEmit("Imported local nexus-repo-link.json (${parsed.linkedHubRepo}) and verified offline.")
+                    }
+                }
+                return@launch
+            }
+
+            if (looksLikeIndex) {
+                val parsed = repository.parseClientIndexJson(rawText)
+                if (parsed == null) {
+                    _messages.tryEmit("Invalid client-codestring-index.json file.")
+                    return@launch
+                }
+                when (val validation = NexusSchemaValidator.validateClientIndex(parsed)) {
+                    is SchemaValidationResult.Invalid -> {
+                        _messages.tryEmit("Rejected client index: ${validation.errors.first()}")
+                    }
+                    is SchemaValidationResult.Valid -> {
+                        repository.saveAppliedIndex(parsed)
+                        _uiState.update { state ->
+                            val keepSelected = parsed.clients.any { it.id == state.selectedClientId && !it.upstreamSourceLock }
+                            val nextClientId = if (keepSelected) {
+                                state.selectedClientId
+                            } else {
+                                parsed.clients.firstOrNull { !it.upstreamSourceLock }?.id ?: state.selectedClientId
+                            }
+                            state.copy(
+                                appliedIndex = parsed,
+                                selectedClientId = nextClientId,
+                                pendingPulledIndex = null,
+                                pendingDiff = null,
+                            )
+                        }
+                        recomputeValidation()
+                        verifyLocalFilesHandshake(silent = true)
+                        _messages.tryEmit("Imported local client-codestring-index.json (rev ${parsed.indexRevision}, ${parsed.clients.size} clients) offline.")
+                    }
+                }
+                return@launch
+            }
+
+            _messages.tryEmit(
+                "Unrecognized local JSON. Select a nexus-repo-link.json or client-codestring-index.json file."
+            )
         }
     }
 
@@ -663,6 +811,7 @@ class NexusHubViewModel(
                     return NexusHubViewModel(
                         repository = container.nexusHubRepository,
                         bridgeService = container.nexusHubBridgeService,
+                        engineSyncRepository = container.engineSyncRepository,
                     ) as T
                 }
             }

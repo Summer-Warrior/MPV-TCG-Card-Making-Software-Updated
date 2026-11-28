@@ -1,5 +1,6 @@
 package com.example.ui.upstream
 
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +32,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,8 +44,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +56,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.upstream.BetaFrameCategory
+import com.example.data.upstream.BetaFrameCodePackage
+import com.example.data.upstream.BetaRadarUiState
+import com.example.data.upstream.DiscoveredBetaFrameItem
 import com.example.data.upstream.GitHubCommitCheckResult
 import com.example.data.upstream.OpenResourceConnector
 import com.example.data.upstream.UpdateCheckState
@@ -87,20 +95,86 @@ fun UpstreamScreen(
     onAddConnector: (gameName: String, owner: String, repo: String, branch: String, resourceType: String) -> Unit,
     onRemoveConnector: (String) -> Unit,
     onSaveRawManifestJson: (String) -> Unit,
+    betaRadarState: BetaRadarUiState = BetaRadarUiState(),
+    onBetaRadarCheckNow: () -> Unit = {},
+    onBetaRadarToggleAutoCheck: (Boolean) -> Unit = {},
+    onBetaRadarMarkAllSeen: () -> Unit = {},
+    onBetaRadarAddCustomFeed: (String, String, BetaFrameCategory) -> Unit = { _, _, _ -> },
+    onBetaRadarRemoveCustomFeed: (String) -> Unit = {},
+    onBetaRadarInspectCode: (DiscoveredBetaFrameItem) -> Unit = {},
+    onBetaRadarDismissCodeDialog: () -> Unit = {},
+    onBetaRadarSaveCodeToUri: (Uri, BetaFrameCodePackage) -> Unit = { _, _ -> },
+    onBetaRadarApplyCodeToSet: (BetaFrameCodePackage) -> Unit = {},
+    onNotify: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
     var showAddConnectorDialog by remember { mutableStateOf(false) }
     var showRawJsonDialog by remember { mutableStateOf(false) }
     var branchEditTarget by remember { mutableStateOf<UpstreamRepoSplit?>(null) }
     var webhookInput by remember(manifest.webhookRelayUrl) { mutableStateOf(manifest.webhookRelayUrl) }
 
-    LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val radarCount = if (betaRadarState.newCount > 0) betaRadarState.newCount else betaRadarState.items.size
+            FilterChip(
+                selected = selectedTabIndex == 0,
+                onClick = { selectedTabIndex = 0 },
+                label = {
+                    Text(
+                        text = "Beta Frame Radar ($radarCount)",
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                },
+                modifier = Modifier.testTag("upstream_tab_beta_radar"),
+            )
+            FilterChip(
+                selected = selectedTabIndex == 1,
+                onClick = { selectedTabIndex = 1 },
+                label = {
+                    Text(
+                        text = "MSE & DataEditorX Splits",
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                },
+                modifier = Modifier.testTag("upstream_tab_splits"),
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+        if (selectedTabIndex == 0) {
+            BetaFrameRadarSection(
+                radarState = betaRadarState,
+                isDeviceOnline = isDeviceOnline,
+                onCheckNow = onBetaRadarCheckNow,
+                onToggleAutoCheck = onBetaRadarToggleAutoCheck,
+                onMarkAllSeen = onBetaRadarMarkAllSeen,
+                onAddCustomFeed = onBetaRadarAddCustomFeed,
+                onRemoveCustomFeed = onBetaRadarRemoveCustomFeed,
+                onInspectCode = onBetaRadarInspectCode,
+                onDismissCodeDialog = onBetaRadarDismissCodeDialog,
+                onSaveCodeToUri = onBetaRadarSaveCodeToUri,
+                onApplyBetaCodeToSet = onBetaRadarApplyCodeToSet,
+                onNotify = onNotify,
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 // Online-Only Gate Banner for Original Magic Set Editor & DataEditorX comparisons
@@ -353,6 +427,8 @@ fun UpstreamScreen(
                 }
             }
         }
+        }
+    }
     }
 
     // ---- Add Open-Resource Connector Dialog ----

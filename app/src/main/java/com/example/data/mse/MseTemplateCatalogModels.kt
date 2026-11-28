@@ -215,6 +215,7 @@ data class FrameImageValidationEntry(
     @Json(name = "width") val width: Int = 0,
     @Json(name = "height") val height: Int = 0,
     @Json(name = "avg_luminance") val avgLuminance: Float = 0.72f,
+    @Json(name = "local_file_path") val localFilePath: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -250,6 +251,7 @@ data class FrameVariantOption(
     val imageUrl: String,
     val swatchColorHex: Long? = null,
     val avgLuminance: Float = 0.72f,
+    val localFilePath: String? = null,
 ) {
     val isDarkFrame: Boolean get() = avgLuminance < 0.44f
 }

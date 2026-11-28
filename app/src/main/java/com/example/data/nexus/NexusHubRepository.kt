@@ -1,6 +1,7 @@
 package com.example.data.nexus
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -79,6 +80,16 @@ class NexusHubRepository(
     fun serializeManifestJson(manifest: NexusRepoLinkManifest): String = linkAdapter.toJson(manifest) + "\n"
 
     fun serializeCardPackJson(pack: NexusCardPackExport): String = packAdapter.toJson(pack) + "\n"
+
+    fun parseManifestJson(rawJson: String): NexusRepoLinkManifest? =
+        runCatching { linkAdapter.fromJson(rawJson) }
+            .onFailure { err -> Log.w(TAG, "Failed parsing nexus-repo-link.json: ${err.message}", err) }
+            .getOrNull()
+
+    fun parseClientIndexJson(rawJson: String): NexusClientCodestringIndex? =
+        runCatching { indexAdapter.fromJson(rawJson) }
+            .onFailure { err -> Log.w(TAG, "Failed parsing client-codestring-index.json: ${err.message}", err) }
+            .getOrNull()
 
     suspend fun loadAppliedIndex(): NexusClientCodestringIndex = withContext(Dispatchers.IO) {
         if (!appliedIndexFile.exists()) {
@@ -161,6 +172,7 @@ class NexusHubRepository(
     }
 
     companion object {
+        private const val TAG = "NexusHubRepository"
         private const val LEGACY_HUB_SLUG = "Summer-Warrior/Nexus-Master-Hub"
         private const val LIVE_HUB_SLUG = "Summer-Warrior/Project-MPV-RP-Master-Hub"
 

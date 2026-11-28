@@ -465,18 +465,23 @@ class MseWorkspaceRepository(
         _styleSpec.value = FrameworkMseScaffoldGenerator.toStructuredStyleSpec(framework)
     }
 
-    suspend fun loadStyleFromUri(uri: Uri): Result<MseStyleSpec> = withContext(Dispatchers.IO) {
-        runCatching {
-            val displayName = resolveDisplayName(uri) ?: "custom.mse-style"
-            val stream = context.contentResolver.openInputStream(uri)
-                ?: throw IllegalStateException("Unable to open selected .mse-style stream.")
-            val parsed = stream.use { input ->
-                MseStyleParser.parseStyleInput(input, sourceLabel = displayName)
+    suspend fun loadStyleFromUri(uri: Uri): Result<MseStyleSpec> =
+        loadStyleWithBytesFromUri(uri).map { it.first }
+
+    suspend fun loadStyleWithBytesFromUri(uri: Uri): Result<Pair<MseStyleSpec, ByteArray>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val displayName = resolveDisplayName(uri) ?: "custom.mse-style"
+                val stream = context.contentResolver.openInputStream(uri)
+                    ?: throw IllegalStateException("Unable to open selected .mse-style stream.")
+                val rawBytes = stream.use { it.readBytes() }
+                val parsed = rawBytes.inputStream().use { input ->
+                    MseStyleParser.parseStyleInput(input, sourceLabel = displayName)
+                }
+                _styleSpec.value = parsed
+                parsed to rawBytes
             }
-            _styleSpec.value = parsed
-            parsed
         }
-    }
 
     fun applyDiscoveredStyleSpec(style: DiscoveredStyle) {
         val spec = style.toStyleSpec()
@@ -506,6 +511,26 @@ class MseWorkspaceRepository(
         _archive.value = updated
         _hasUnsavedChanges.value = true
         applyDiscoveredStyleSpec(style)
+        updated
+    }
+
+    /**
+     * Applies a parsed MSE [MseStyleSpec] (e.g., from the Beta Frame Radar code viewer)
+     * to the active workspace without modifying card art (`image` remains untouched/null).
+     */
+    suspend fun applyRawStyleSpec(
+        spec: MseStyleSpec,
+        stylesheetId: String? = null,
+    ): MseSetArchive? = withContext(Dispatchers.IO) {
+        _styleSpec.value = spec
+        val current = _archive.value ?: return@withContext null
+        val targetSheet = stylesheetId?.trim().takeUnless { it.isNullOrBlank() } ?: spec.stylesheetId
+        if (targetSheet.isBlank()) return@withContext current
+        pushUndoSnapshot()
+        val updatedDoc = current.document.withTopLevelScalar("stylesheet", targetSheet)
+        val updated = current.copy(document = updatedDoc)
+        _archive.value = updated
+        _hasUnsavedChanges.value = true
         updated
     }
 

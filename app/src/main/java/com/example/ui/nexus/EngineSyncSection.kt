@@ -19,8 +19,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -71,7 +73,10 @@ import com.example.ui.theme.StatusOfflineAmber
 @Composable
 fun EngineSyncSection(
     uiState: EngineSyncUiState,
+    isDeviceOnline: Boolean = false,
     fineGrainedPat: String,
+    onVerifyLocalEngineFiles: () -> Unit = {},
+    onImportLocalEngineFile: () -> Unit = {},
     onSyncLiveEngine: () -> Unit,
     onRecordCardMakerConsent: (ConsentStatus, String) -> Unit,
     onFinalizeStagedUpdate: () -> Unit,
@@ -172,13 +177,39 @@ fun EngineSyncSection(
                         )
                     }
 
+                    // Primary 100% offline local-file handshake verification & SAF import
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Button(
+                            onClick = onVerifyLocalEngineFiles,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("engine_verify_local_files_button"),
+                        ) {
+                            Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Verify Local Handshake Files")
+                        }
+                        OutlinedButton(
+                            onClick = onImportLocalEngineFile,
+                            modifier = Modifier.testTag("engine_import_local_file_button"),
+                        ) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Import JSON")
+                        }
+                    }
+
+                    // Explicit opt-in online update check (strictly gated on device connectivity)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
                             onClick = onSyncLiveEngine,
-                            enabled = !uiState.isSyncingEngine && !local.syncPaused,
+                            enabled = isDeviceOnline && !uiState.isSyncingEngine && !local.syncPaused,
                             modifier = Modifier
                                 .weight(1f)
                                 .testTag("engine_sync_live_button"),
@@ -187,14 +218,19 @@ fun EngineSyncSection(
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(16.dp),
                                     strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary,
                                 )
                                 Spacer(Modifier.width(6.dp))
-                                Text("Reading Live Engine…")
+                                Text("Checking Online Updates…")
                             } else {
-                                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("Sync Tcg-game-engine-test")
+                                Text(
+                                    if (isDeviceOnline) {
+                                        "Optional Online Update Check"
+                                    } else {
+                                        "Offline — Online Update Check Paused"
+                                    }
+                                )
                             }
                         }
                         OutlinedButton(

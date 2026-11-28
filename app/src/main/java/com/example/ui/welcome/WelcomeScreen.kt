@@ -105,6 +105,7 @@ fun WelcomeScreen(
     onGenerateFrameworkScaffold: (UniversalCardFramework) -> Unit = {},
     onOpenOfficialSetComparison: () -> Unit = {},
     onOpenUsageReports: () -> Unit = {},
+    betaNewCount: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     var showNewSetWizard by remember { mutableStateOf(false) }
@@ -363,6 +364,7 @@ fun WelcomeScreen(
                 SecondaryToolTile(
                     icon = Icons.Default.CloudSync,
                     label = stringResource(R.string.tool_upstream),
+                    badgeText = if (betaNewCount > 0) "$betaNewCount New Beta" else null,
                     onClick = onOpenUpstreamManager,
                     modifier = Modifier
                         .weight(1f)
@@ -566,6 +568,7 @@ private fun WelcomeActionCard(
 private fun SecondaryToolTile(
     icon: ImageVector,
     label: String,
+    badgeText: String? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -596,6 +599,22 @@ private fun SecondaryToolTile(
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
             )
+            if (!badgeText.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    modifier = Modifier.testTag("welcome_beta_new_badge"),
+                ) {
+                    Text(
+                        text = badgeText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
         }
     }
 }

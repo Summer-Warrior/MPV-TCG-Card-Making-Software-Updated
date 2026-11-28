@@ -186,6 +186,8 @@ fun SetWorkspaceScreen(
     onUsageSearchQueryChanged: (String) -> Unit = {},
     onEditTelemetryCardInStudio: (String, String) -> Unit = { _, _ -> },
     onBranchTelemetryCardVariant: (String, String) -> Unit = { _, _ -> },
+    isDeviceOnline: Boolean = false,
+    onSyncFramesOnline: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -635,6 +637,9 @@ fun SetWorkspaceScreen(
                         onUpdateCalibrationScale = onUpdateCalibrationScale,
                         onToggleCalibrationLock = onToggleCalibrationLock,
                         onUpdatePhysicalProfile = onUpdatePhysicalProfile,
+                        isDeviceOnline = isDeviceOnline,
+                        onLoadLocalStyleUri = onLoadStyleUri,
+                        onSyncFramesOnline = onSyncFramesOnline,
                     )
                 }
 

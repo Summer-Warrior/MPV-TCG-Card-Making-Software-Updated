@@ -1,6 +1,7 @@
 package com.example.data.nexus
 
 import android.content.Context
+import android.util.Log
 import com.example.domain.nexus.EngineHealthStatusPayload
 import com.example.domain.nexus.EngineSyncSnapshot
 import com.example.domain.nexus.HandshakeContract
@@ -150,6 +151,16 @@ class EngineSyncRepository(
     fun serializeAppManifestJson(manifest: NexusAppManifest): String =
         appManifestAdapter.toJson(manifest) + "\n"
 
+    fun parseContractJson(rawJson: String): HandshakeContract? =
+        runCatching { contractAdapter.fromJson(rawJson) }
+            .onFailure { err -> Log.w(TAG, "Failed parsing HandshakeContract JSON: ${err.message}", err) }
+            .getOrNull()
+
+    fun parseSnapshotJson(rawJson: String): EngineSyncSnapshot? =
+        runCatching { snapshotAdapter.fromJson(rawJson) }
+            .onFailure { err -> Log.w(TAG, "Failed parsing EngineSyncSnapshot JSON: ${err.message}", err) }
+            .getOrNull()
+
     private fun writeAtomic(target: File, content: String) {
         dir.mkdirs()
         val tmp = File(dir, "${target.name}.tmp")
@@ -158,6 +169,7 @@ class EngineSyncRepository(
     }
 
     companion object {
+        private const val TAG = "EngineSyncRepository"
         private const val LEGACY_HUB_SLUG = "Summer-Warrior/Nexus-Master-Hub"
         private const val LIVE_HUB_SLUG = "Summer-Warrior/Project-MPV-RP-Master-Hub"
     }

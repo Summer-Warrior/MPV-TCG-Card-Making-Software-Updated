@@ -114,4 +114,10 @@ class AppContainer(context: Context) {
         context = appContext,
         moshi = moshi,
     )
+
+    val betaFrameRadarRepository = com.example.data.upstream.BetaFrameRadarRepository(
+        context = appContext,
+        okHttpClient = okHttpClient,
+        moshi = moshi,
+    )
 }

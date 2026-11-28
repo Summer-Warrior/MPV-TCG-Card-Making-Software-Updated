@@ -6,6 +6,7 @@ import android.graphics.Color as AndroidColor
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -43,8 +44,12 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.TableRows
@@ -58,6 +63,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -101,6 +107,7 @@ import com.example.data.mse.FrameVariantOption
 import com.example.data.mse.MseCardView
 import com.example.data.mse.MseHitbox
 import com.example.data.mse.MseSetArchive
+import com.example.data.mse.MseStyleParser
 import com.example.data.mse.MseStyleSpec
 import com.example.data.mse.MseTemplateCatalogRepository
 import com.example.data.mse.ResolvedOfflineFrame
@@ -158,6 +165,9 @@ fun CardsTabContent(
     onUpdateCalibrationScale: (Float) -> Unit,
     onToggleCalibrationLock: (Boolean) -> Unit,
     onUpdatePhysicalProfile: (PhysicalCardProfile) -> Unit,
+    isDeviceOnline: Boolean = false,
+    onLoadLocalStyleUri: (Uri) -> Unit = {},
+    onSyncFramesOnline: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -172,7 +182,9 @@ fun CardsTabContent(
 
     val customCardFontFamily = remember(localSelectedFontFile?.absolutePath, localSelectedFontFile?.lastModified()) {
         localSelectedFontFile?.let { file ->
-            runCatching { FontFamily(Typeface.createFromFile(file)) }.getOrNull()
+            runCatching { FontFamily(Typeface.createFromFile(file)) }
+                .onFailure { Log.w("CardsTabContent", "Could not load local font ${file.name}: ${it.message}") }
+                .getOrNull()
         }
     }
 
@@ -205,15 +217,27 @@ fun CardsTabContent(
     var editTarget by remember { mutableStateOf<CardFieldEditTarget?>(null) }
     var pendingCropUri by remember { mutableStateOf<Uri?>(null) }
     var showCardTableSheet by remember { mutableStateOf(false) }
+    var showInlineCardListOnCompact by remember { mutableStateOf(false) }
 
     val activeVariant = offlineFrame?.activeVariant
     val activeVariantUrl = activeVariant?.imageUrl
-    var frameLoadFailedForUrl by remember(activeVariantUrl) { mutableStateOf(false) }
+    val localFrameFileExists = remember(activeVariant?.localFilePath) {
+        activeVariant?.localFilePath?.let { File(it).exists() } == true
+    }
+    var frameLoadFailedForUrl by remember(activeVariantUrl, activeVariant?.localFilePath) {
+        mutableStateOf(false)
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri: Uri? ->
         if (uri != null) pendingCropUri = uri
+    }
+
+    val localStylePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri != null) onLoadLocalStyleUri(uri)
     }
 
     val launchArtPicker = {
@@ -223,11 +247,17 @@ fun CardsTabContent(
     }
 
     val isOnlineRendered = renderState is CardRenderState.Rendered
+    // NEVER hide a valid real frame image just because a scripted `.mse-style` has non-static coordinates.
     val canShowUpstreamBaseFrame = !isOnlineRendered &&
         activeVariant != null &&
-        !activeVariantUrl.isNullOrBlank() &&
-        !frameLoadFailedForUrl &&
-        styleSpec.hasValidCompositeGeometry()
+        (localFrameFileExists || !activeVariantUrl.isNullOrBlank()) &&
+        !frameLoadFailedForUrl
+
+    val activeFrameColorKey = remember(activeVariant?.key, activeCard?.field("card color"), activeCard?.castingCost, activeCard?.superType) {
+        activeVariant?.key
+            ?: activeCard?.field("card color")?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+            ?: inferFallbackCardColorKey(activeCard)
+    }
 
     val stageVignette = Brush.radialGradient(
         colors = listOf(
@@ -236,10 +266,17 @@ fun CardsTabContent(
         )
     )
 
-    Column(
-        modifier = modifier.fillMaxSize(),
-    ) {
-        // ---- Center Card Stage (Soft Tabletop Vignette, 14.dp Card Shadow, ZERO Floating Badges Over Card) ----
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val isWideWorkbench = maxWidth >= 720.dp
+        val compactInlineListHeight = (maxHeight * 0.36f).coerceIn(156.dp, 260.dp)
+
+        Row(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .weight(if (isWideWorkbench) 0.56f else 1f)
+                    .fillMaxHeight(),
+            ) {
+                // ---- Center Card Stage (Soft Tabletop Vignette, 14.dp Card Shadow, ZERO Floating Badges Over Card) ----
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -351,10 +388,13 @@ fun CardsTabContent(
                                 modifier = cardTransformModifier.testTag("offline_upstream_frame_surface"),
                             )
                         } else {
-                            // Safe non-overlapping fallback ONLY when upstream frame or coordinates cannot be resolved
+                            // Authentic MSE-proportioned fallback sheet ONLY when no real PNG/JPG frame is cached yet
                             StructuredOfflineCardLayout(
                                 card = activeCard,
                                 setCode = archive.document.setInfo.setCode,
+                                borderColorSpec = archive.document.setInfo.borderColor,
+                                frameColorKey = activeFrameColorKey,
+                                customFontFamily = customCardFontFamily,
                                 embeddedArtBytes = embeddedArtBytes,
                                 onEditName = {
                                     editTarget = CardFieldEditTarget.SingleField("name", activeCard?.name.orEmpty())
@@ -393,9 +433,14 @@ fun CardsTabContent(
             }
         }
 
-        // ---- Compact Frame Color / Variant Selector & Subtle Status Caption (BELOW Card, NEVER Over Card) ----
+        // ---- Compact Frame Color / Variant Selector & 1-Tap Local Style / Online Frame Sync (BELOW Card, NEVER Over Card) ----
         if (!isOnlineRendered) {
-            val variants = offlineFrame?.variants.orEmpty()
+            val resolvedVariants = offlineFrame?.variants.orEmpty()
+            val displayVariants = if (resolvedVariants.isNotEmpty()) {
+                resolvedVariants
+            } else {
+                DEFAULT_MSE_FRAME_COLOR_OPTIONS
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -404,44 +449,97 @@ fun CardsTabContent(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                if (variants.size > 1) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        variants.forEach { variant ->
-                            val selected = variant.key == offlineFrame?.activeVariant?.key
-                            FrameVariantPill(
-                                variant = variant,
-                                selected = selected,
-                                onClick = {
-                                    frameLoadFailedForUrl = false
-                                    onSelectOfflineFrameVariant(variant.key)
-                                },
-                            )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    displayVariants.forEach { variant ->
+                        val selected = if (resolvedVariants.isNotEmpty()) {
+                            variant.key == offlineFrame?.activeVariant?.key
+                        } else {
+                            variant.key.equals(activeFrameColorKey, ignoreCase = true)
                         }
+                        FrameVariantPill(
+                            variant = variant,
+                            selected = selected,
+                            onClick = {
+                                frameLoadFailedForUrl = false
+                                onSelectOfflineFrameVariant(variant.key)
+                            },
+                        )
                     }
                 }
 
-                Text(
-                    text = if (activeFramework != null) {
-                        "${activeFramework.effectiveShortName} • ${stringResource(R.string.offline_frame_caption)}"
-                    } else {
-                        stringResource(R.string.offline_frame_caption)
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    textAlign = TextAlign.Center,
-                )
+                if (!canShowUpstreamBaseFrame) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(
+                            onClick = { localStylePickerLauncher.launch(arrayOf("*/*")) },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            modifier = Modifier
+                                .height(26.dp)
+                                .testTag("load_local_mse_style_inline_button"),
+                        ) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Load Local .mse-style", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Text(
+                            text = "•",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                        )
+                        TextButton(
+                            onClick = onSyncFramesOnline,
+                            enabled = isDeviceOnline && offlineFrame?.isLoading != true,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            modifier = Modifier
+                                .height(26.dp)
+                                .testTag("sync_frames_online_inline_button"),
+                        ) {
+                            Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(13.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = when {
+                                    offlineFrame?.isLoading == true -> "Syncing Frames…"
+                                    isDeviceOnline -> "Sync Frames (Online)"
+                                    else -> "Sync Frames (Offline)"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                } else {
+                    Text(
+                        text = buildString {
+                            if (activeFramework != null) {
+                                append("${activeFramework.effectiveShortName} • ")
+                            }
+                            if (localFrameFileExists) {
+                                append("Local Cached Frame • ")
+                            }
+                            append(stringResource(R.string.offline_frame_caption))
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
         }
 
@@ -602,6 +700,23 @@ fun CardsTabContent(
             }
         }
 
+        // ---- Collapsible Inline MSE Card List Panel on Compact Phones (~36% height) ----
+        if (!isWideWorkbench && showInlineCardListOnCompact) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            MseDockedCardListPanel(
+                cards = cards,
+                activeCardIndex = activeCardIndex,
+                onSelectCard = onSelectCard,
+                onAddBlankCard = onAddBlankCard,
+                onDuplicateCard = onDuplicateCard,
+                onDeleteCard = onDeleteCard,
+                onExpandFullSheet = { showCardTableSheet = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(compactInlineListHeight),
+            )
+        }
+
         // ---- Clean MSE Bottom Card Bar (Explicit 16.dp Horizontal Padding — Zero Edge-Touch on 360dp) ----
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -640,7 +755,13 @@ fun CardsTabContent(
                             modifier = Modifier
                                 .weight(1f, fill = false)
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable { showCardTableSheet = true }
+                                .clickable {
+                                    if (isWideWorkbench) {
+                                        showCardTableSheet = true
+                                    } else {
+                                        showInlineCardListOnCompact = !showInlineCardListOnCompact
+                                    }
+                                }
                                 .testTag("bottom_card_table_trigger"),
                         ) {
                             Row(
@@ -655,11 +776,27 @@ fun CardsTabContent(
                                     modifier = Modifier.size(15.dp),
                                 )
                                 Text(
-                                    text = "Card ${if (cards.isEmpty()) 0 else activeCardIndex + 1} / ${cards.size}",
+                                    text = if (isWideWorkbench) {
+                                        "Card ${if (cards.isEmpty()) 0 else activeCardIndex + 1} / ${cards.size}"
+                                    } else {
+                                        "Cards (${cards.size})"
+                                    },
                                     style = MaterialTheme.typography.labelLarge,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
+                                if (!isWideWorkbench) {
+                                    Icon(
+                                        imageVector = if (showInlineCardListOnCompact) {
+                                            Icons.Default.KeyboardArrowDown
+                                        } else {
+                                            Icons.Default.KeyboardArrowUp
+                                        },
+                                        contentDescription = if (showInlineCardListOnCompact) "Collapse card table" else "Expand card table",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
                             }
                         }
 
@@ -713,7 +850,26 @@ fun CardsTabContent(
                 }
             }
         }
-    }
+            } // end left Card Preview Column
+
+            // ---- Wide / Tablet / Landscape Docked Live MSE Card List Table (44% Split Pane) ----
+            if (isWideWorkbench) {
+                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                MseDockedCardListPanel(
+                    cards = cards,
+                    activeCardIndex = activeCardIndex,
+                    onSelectCard = onSelectCard,
+                    onAddBlankCard = onAddBlankCard,
+                    onDuplicateCard = onDuplicateCard,
+                    onDeleteCard = onDeleteCard,
+                    onExpandFullSheet = { showCardTableSheet = true },
+                    modifier = Modifier
+                        .weight(0.44f)
+                        .fillMaxHeight(),
+                )
+            }
+        } // end Row
+    } // end BoxWithConstraints
 
     // ---- Field Editor Bottom Sheet ----
     editTarget?.let { target ->
@@ -796,19 +952,33 @@ private fun RealUpstreamBaseFrameCompositor(
     modifier: Modifier = Modifier,
 ) {
     val frameImageUrl = variant.imageUrl
+    val frameModel: Any = remember(variant.localFilePath, frameImageUrl) {
+        variant.localFilePath?.let(::File)?.takeIf { it.exists() } ?: frameImageUrl
+    }
     val cardW = styleSpec.cardWidthPx.coerceAtLeast(1).toFloat()
     val cardH = styleSpec.cardHeightPx.coerceAtLeast(1).toFloat()
 
     val userArtBitmap = remember(embeddedArtBytes) {
         embeddedArtBytes?.let { bytes ->
-            runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+            runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+                .onFailure { Log.w("CardsTabContent", "Could not decode embedded card art: ${it.message}") }
+                .getOrNull()
         }
     }
 
-    var loadedFrameBitmap by remember(frameImageUrl) { mutableStateOf<Bitmap?>(null) }
+    var loadedFrameBitmap by remember(frameModel) { mutableStateOf<Bitmap?>(null) }
 
-    val artBox = styleSpec.artHitbox
-    val artBehindFrame = artBox != null && artBox.zIndex <= 0 && frameImageUrl.endsWith(".png", ignoreCase = true)
+    val effectiveHitboxes = remember(styleSpec) {
+        resolveEffectiveCompositeHitboxes(styleSpec)
+    }
+    val artBox = remember(effectiveHitboxes) {
+        effectiveHitboxes.firstOrNull {
+            val k = it.field.lowercase()
+            k == "image" || k == "art" || k == "image 1" || k == "card image"
+        }
+    }
+    val artBehindFrame = artBox != null && artBox.zIndex <= 0 &&
+        (variant.localFilePath ?: frameImageUrl).endsWith(".png", ignoreCase = true)
 
     BoxWithConstraints(
         modifier = modifier
@@ -842,10 +1012,10 @@ private fun RealUpstreamBaseFrameCompositor(
             }
         }
 
-        // Layer 2: Real Upstream `.mse-style` Base-Frame Image (from MagicSetEditorPacks raw CDN via Coil)
+        // Layer 2: Real Local Cached or Upstream `.mse-style` Base-Frame Image via Coil
         AsyncImage(
-            model = frameImageUrl,
-            contentDescription = "${styleSpec.shortName} upstream card frame",
+            model = frameModel,
+            contentDescription = "${styleSpec.shortName} card frame",
             contentScale = ContentScale.FillBounds,
             onState = { state ->
                 when (state) {
@@ -967,8 +1137,8 @@ private fun RealUpstreamBaseFrameCompositor(
         }
 
         // Layer 4: Core Visible Card Fields Only — Guaranteed High-Contrast Text (NEVER black-on-black)
-        val textHitboxes = remember(styleSpec.hitboxes, styleSpec.game) {
-            prepareOverlayTextHitboxes(styleSpec.hitboxes, styleSpec.game)
+        val textHitboxes = remember(effectiveHitboxes, styleSpec.game) {
+            prepareOverlayTextHitboxes(effectiveHitboxes, styleSpec.game)
         }
 
         textHitboxes.forEach { hitbox ->
@@ -1187,14 +1357,19 @@ private fun FrameVariantPill(
 }
 
 /**
- * Clean, modern, strictly non-overlapping structured card layout used ONLY as a safe fallback
- * when the Bridge is offline AND the active style has no resolvable upstream frame image or coordinates.
- * Strictly obeys PROJECT_SPEC.md: NEVER draws fake MSE frames and NEVER populates default artwork.
+ * Authentic Magic Set Editor card sheet fallback used ONLY when the Bridge is offline AND
+ * no local/cached PNG/JPG frame exists yet on disk.
+ * - Uses outer border parsed from `archive.document.setInfo.borderColor` (`rgb(r,g,b)`).
+ * - Inner beveled plate subtly tinted by active card color (`Colorless/White/Blue/Black/Red/Green/Gold/Artifact/Land`).
+ * - Strictly preserves `image == null` (ZERO default card art).
  */
 @Composable
 private fun StructuredOfflineCardLayout(
     card: MseCardView?,
     setCode: String,
+    borderColorSpec: String,
+    frameColorKey: String,
+    customFontFamily: FontFamily?,
     embeddedArtBytes: ByteArray?,
     onEditName: () -> Unit,
     onEditCost: () -> Unit,
@@ -1207,309 +1382,512 @@ private fun StructuredOfflineCardLayout(
     onEditPowerToughness: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val outerBorderColor = remember(borderColorSpec) { parseMseBorderColor(borderColorSpec) }
+    val palette = remember(frameColorKey) { resolveMseSheetPalette(frameColorKey) }
+    val footerIsDarkBorder = remember(outerBorderColor) {
+        (0.2126f * outerBorderColor.red + 0.7152f * outerBorderColor.green + 0.0722f * outerBorderColor.blue) < 0.45f
+    }
+    val footerTextColor = if (footerIsDarkBorder) Color(0xFFE6E6EA) else Color(0xFF1A1A1E)
+
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        color = outerBorderColor,
+        border = BorderStroke(1.dp, Color(0xFF2B2D35)),
         modifier = modifier,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 5.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // 1. Header Row (Card Name + neutral Cost placeholder — never pre-filled gold "W")
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onEditName)
-                        .testTag("card_field_name"),
-                ) {
-                    val nameText = card?.name.orEmpty()
-                    Text(
-                        text = nameText.ifBlank { "Card Name" },
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (nameText.isBlank()) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    )
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier
-                        .widthIn(min = 60.dp, max = 108.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onEditCost)
-                        .testTag("card_field_cost"),
-                ) {
-                    val costText = card?.castingCost.orEmpty()
-                    Text(
-                        text = costText.ifBlank { "Cost" },
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (costText.isBlank()) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        },
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    )
-                }
-            }
-
-            // 2. Artwork Box (Strictly empty until user imports/crops an image)
-            val userArtBitmap = remember(embeddedArtBytes) {
-                embeddedArtBytes?.let { bytes ->
-                    runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
-                }
-            }
-            val dashColor = MaterialTheme.colorScheme.outline
-
-            Box(
+            // Inner Beveled MSE Frame Plate
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = palette.framePlate,
+                border = BorderStroke(1.2.dp, palette.bevelStroke),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-                    .clickable(onClick = onTapArt)
-                    .testTag("card_field_artwork"),
-                contentAlignment = Alignment.Center,
+                    .weight(1f),
             ) {
-                if (userArtBitmap != null) {
-                    Image(
-                        bitmap = userArtBitmap.asImageBitmap(),
-                        contentDescription = "Card artwork",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    // 1. Classic MSE Header Bar (Card Name + Cost)
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = palette.barFill,
+                        border = BorderStroke(1.dp, palette.barStroke),
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            IconButton(onClick = onTapArt, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Default.Edit, contentDescription = "Replace artwork", modifier = Modifier.size(16.dp))
-                            }
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                        ) {
-                            IconButton(
-                                onClick = onClearArt,
+                            val nameText = card?.name.orEmpty()
+                            Box(
                                 modifier = Modifier
-                                    .size(32.dp)
-                                    .testTag("card_clear_art_button"),
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable(onClick = onEditName)
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    .testTag("card_field_name"),
                             ) {
-                                Icon(
-                                    Icons.Default.DeleteOutline,
-                                    contentDescription = "Clear artwork",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(16.dp),
+                                Text(
+                                    text = nameText.ifBlank { "Card Name" },
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontFamily = customFontFamily ?: MaterialTheme.typography.titleSmall.fontFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                    ),
+                                    color = if (nameText.isBlank()) palette.barHint else palette.barInk,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = palette.framePlate.copy(alpha = 0.55f),
+                                border = BorderStroke(0.8.dp, palette.barStroke.copy(alpha = 0.7f)),
+                                modifier = Modifier
+                                    .widthIn(min = 44.dp, max = 96.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable(onClick = onEditCost)
+                                    .testTag("card_field_cost"),
+                            ) {
+                                val costText = card?.castingCost.orEmpty()
+                                Text(
+                                    text = costText.ifBlank { "Cost" },
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        fontFamily = customFontFamily ?: MaterialTheme.typography.labelLarge.fontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                    ),
+                                    color = if (costText.isBlank()) palette.barHint else palette.barInk,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                                 )
                             }
                         }
                     }
-                } else {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        drawRoundRect(
-                            color = dashColor,
-                            cornerRadius = CornerRadius(10.dp.toPx(), 10.dp.toPx()),
-                            style = Stroke(
-                                width = 1.2.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f)),
+
+                    // 2. Recessed Art Window (Strictly empty until user imports/crops an image)
+                    val userArtBitmap = remember(embeddedArtBytes) {
+                        embeddedArtBytes?.let { bytes ->
+                            runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+                                .onFailure { Log.w("CardsTabContent", "Failed decoding card art: ${it.message}") }
+                                .getOrNull()
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1.08f)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFF15171E))
+                            .border(1.2.dp, palette.bevelStroke, RoundedCornerShape(4.dp))
+                            .clickable(onClick = onTapArt)
+                            .testTag("card_field_artwork"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (userArtBitmap != null) {
+                            Image(
+                                bitmap = userArtBitmap.asImageBitmap(),
+                                contentDescription = "Card artwork",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(5.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color.Black.copy(alpha = 0.68f),
+                                ) {
+                                    IconButton(onClick = onTapArt, modifier = Modifier.size(28.dp)) {
+                                        Icon(
+                                            Icons.Default.Edit,
+                                            contentDescription = "Replace artwork",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color.Black.copy(alpha = 0.68f),
+                                ) {
+                                    IconButton(
+                                        onClick = onClearArt,
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .testTag("card_clear_art_button"),
+                                    ) {
+                                        Icon(
+                                            Icons.Default.DeleteOutline,
+                                            contentDescription = "Clear artwork",
+                                            tint = Color(0xFFFF8A8A),
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Canvas(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+                                drawRoundRect(
+                                    color = Color(0xFF4F5566),
+                                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                                    style = Stroke(
+                                        width = 1.dp.toPx(),
+                                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)),
+                                    ),
+                                )
+                            }
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.padding(10.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AddPhotoAlternate,
+                                    contentDescription = null,
+                                    tint = Color(0xFFB7BCCB),
+                                    modifier = Modifier.size(22.dp),
+                                )
+                                Text(
+                                    text = stringResource(R.string.tap_to_add_artwork),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFFB7BCCB),
+                                )
+                            }
+                        }
+                    }
+
+                    // 3. Full-Width Classic MSE Type Line Bar
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = palette.barFill,
+                        border = BorderStroke(1.dp, palette.barStroke),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(onClick = onEditTypeLine)
+                            .testTag("card_field_type_line"),
+                    ) {
+                        val typeText = card?.fullTypeLine.orEmpty()
+                        Text(
+                            text = typeText.ifBlank { "Card Type — Subtype" },
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = customFontFamily ?: MaterialTheme.typography.bodySmall.fontFamily,
+                                fontWeight = FontWeight.SemiBold,
                             ),
+                            color = if (typeText.isBlank()) palette.barHint else palette.barInk,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                         )
                     }
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(12.dp),
+
+                    // 4. Parchment / High-Contrast Rules + Italic Flavor Box with Recessed P/T Badge
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(0.95f),
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.AddPhotoAlternate,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(26.dp),
-                        )
-                        Text(
-                            text = stringResource(R.string.tap_to_add_artwork),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = palette.textBoxFill,
+                            border = BorderStroke(1.dp, palette.barStroke),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                val rulesText = card?.ruleText.orEmpty()
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1.35f)
+                                        .clickable(onClick = onEditRules)
+                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        .testTag("card_field_rules"),
+                                ) {
+                                    Text(
+                                        text = rulesText.ifBlank { "Tap to add rules text" },
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = customFontFamily ?: MaterialTheme.typography.bodySmall.fontFamily,
+                                        ),
+                                        color = if (rulesText.isBlank()) palette.barHint else palette.barInk,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+
+                                HorizontalDivider(
+                                    color = palette.barStroke.copy(alpha = 0.45f),
+                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                )
+
+                                val flavorText = card?.flavorText.orEmpty()
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(0.65f)
+                                        .clickable(onClick = onEditFlavor)
+                                        .padding(start = 8.dp, end = 64.dp, top = 4.dp, bottom = 4.dp)
+                                        .testTag("card_field_flavor"),
+                                ) {
+                                    Text(
+                                        text = flavorText.ifBlank { "Flavor text" },
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = customFontFamily ?: MaterialTheme.typography.bodySmall.fontFamily,
+                                            fontStyle = FontStyle.Italic,
+                                        ),
+                                        color = palette.barHint,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+
+                        // Recessed Bottom-Right MSE P/T Box
+                        val ptText = card?.ptSummary.orEmpty()
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = palette.barFill,
+                            border = BorderStroke(1.2.dp, palette.bevelStroke),
+                            shadowElevation = 2.dp,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(3.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(onClick = onEditPowerToughness)
+                                .testTag("card_field_pt"),
+                        ) {
+                            Text(
+                                text = ptText.ifBlank { "P / T" },
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontFamily = customFontFamily ?: MaterialTheme.typography.labelLarge.fontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                ),
+                                color = if (ptText.isBlank()) palette.barHint else palette.barInk,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                            )
+                        }
                     }
                 }
             }
 
-            // 3. Type Line Row
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            // 5. Crisp Bottom Collector / Illustrator Bar on Outer Card Border
+            val illustrator = card?.illustrator.orEmpty()
+            val footerLabel = buildString {
+                if (setCode.isNotBlank()) {
+                    append(setCode)
+                    append(" • ")
+                }
+                if (illustrator.isNotBlank()) {
+                    append(illustrator)
+                } else {
+                    append("Illustrator")
+                }
+            }
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onEditTypeLine)
-                    .testTag("card_field_type_line"),
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable(onClick = onEditIllustrator)
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                    .testTag("card_field_illustrator"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                val typeText = card?.fullTypeLine.orEmpty()
                 Text(
-                    text = typeText.ifBlank { "Card Type — Subtype" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (typeText.isBlank()) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
+                    text = footerLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = footerTextColor.copy(alpha = if (illustrator.isBlank()) 0.68f else 0.94f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    modifier = Modifier.weight(1f),
                 )
             }
-
-            // 4. Rules & Flavor Box
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(0.95f),
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    val rulesText = card?.ruleText.orEmpty()
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1.35f)
-                            .clickable(onClick = onEditRules)
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                            .testTag("card_field_rules"),
-                    ) {
-                        Text(
-                            text = rulesText.ifBlank { "Tap to add rules text" },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (rulesText.isBlank()) {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp),
-                    )
-
-                    val flavorText = card?.flavorText.orEmpty()
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(0.65f)
-                            .clickable(onClick = onEditFlavor)
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("card_field_flavor"),
-                    ) {
-                        Text(
-                            text = flavorText.ifBlank { "Flavor text" },
-                            style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-
-            // 5. Dedicated Footer Row (Illustrator + P/T)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val illustrator = card?.illustrator.orEmpty()
-                val footerLabel = buildString {
-                    if (setCode.isNotBlank()) {
-                        append(setCode)
-                        if (illustrator.isNotBlank()) append(" • ")
-                    }
-                    if (illustrator.isNotBlank()) {
-                        append(illustrator)
-                    } else if (setCode.isBlank()) {
-                        append("Illustrator")
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable(onClick = onEditIllustrator)
-                        .padding(horizontal = 4.dp, vertical = 6.dp)
-                        .testTag("card_field_illustrator"),
-                ) {
-                    Text(
-                        text = footerLabel,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (illustrator.isBlank() && setCode.isBlank()) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                val ptText = card?.ptSummary.orEmpty()
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onEditPowerToughness)
-                        .testTag("card_field_pt"),
-                ) {
-                    Text(
-                        text = ptText.ifBlank { "P / T" },
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (ptText.isBlank()) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                    )
-                }
-            }
         }
+    }
+}
+
+private data class MseSheetPalette(
+    val framePlate: Color,
+    val bevelStroke: Color,
+    val barFill: Color,
+    val barStroke: Color,
+    val textBoxFill: Color,
+    val barInk: Color,
+    val barHint: Color,
+)
+
+private val DEFAULT_MSE_FRAME_COLOR_OPTIONS = listOf(
+    FrameVariantOption("colorless", "Colorless", "", swatchColorHex = 0xFFAAB0BC),
+    FrameVariantOption("white", "White", "", swatchColorHex = 0xFFF3E9C9),
+    FrameVariantOption("blue", "Blue", "", swatchColorHex = 0xFF3E88C7),
+    FrameVariantOption("black", "Black", "", swatchColorHex = 0xFF453D4F),
+    FrameVariantOption("red", "Red", "", swatchColorHex = 0xFFC9513E),
+    FrameVariantOption("green", "Green", "", swatchColorHex = 0xFF3C8A57),
+    FrameVariantOption("multicolor", "Gold", "", swatchColorHex = 0xFFD4A84B),
+    FrameVariantOption("artifact", "Artifact", "", swatchColorHex = 0xFF8B99A8),
+    FrameVariantOption("land", "Land", "", swatchColorHex = 0xFF9C8468),
+)
+
+private fun inferFallbackCardColorKey(card: MseCardView?): String {
+    if (card == null) return "colorless"
+    val superType = card.superType.lowercase()
+    if (superType.contains("land")) return "land"
+    if (superType.contains("artifact")) return "artifact"
+    val cost = card.castingCost.uppercase()
+    val colors = buildList {
+        if (cost.contains('W')) add("white")
+        if (cost.contains('U')) add("blue")
+        if (cost.contains('B')) add("black")
+        if (cost.contains('R')) add("red")
+        if (cost.contains('G')) add("green")
+    }
+    return when {
+        colors.size >= 2 -> "multicolor"
+        colors.size == 1 -> colors.first()
+        else -> "colorless"
+    }
+}
+
+private fun parseMseBorderColor(spec: String): Color {
+    val match = Regex("rgb\\s*\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)", RegexOption.IGNORE_CASE)
+        .find(spec)
+    if (match != null) {
+        val r = match.groupValues[1].toIntOrNull()?.coerceIn(0, 255) ?: 14
+        val g = match.groupValues[2].toIntOrNull()?.coerceIn(0, 255) ?: 15
+        val b = match.groupValues[3].toIntOrNull()?.coerceIn(0, 255) ?: 18
+        return Color(r / 255f, g / 255f, b / 255f)
+    }
+    return Color(0xFF101116)
+}
+
+private fun resolveMseSheetPalette(frameColorKey: String): MseSheetPalette {
+    val ink = Color(0xFF14151A)
+    val hint = Color(0xFF535866)
+    return when (frameColorKey.lowercase()) {
+        "white", "w" -> MseSheetPalette(
+            framePlate = Color(0xFFE7DFCB),
+            bevelStroke = Color(0xFFC4B89B),
+            barFill = Color(0xFFF6F2E6),
+            barStroke = Color(0xFFB3A688),
+            textBoxFill = Color(0xFFFAF7EE),
+            barInk = ink,
+            barHint = hint,
+        )
+        "blue", "u" -> MseSheetPalette(
+            framePlate = Color(0xFF2B6EA3),
+            bevelStroke = Color(0xFF194B75),
+            barFill = Color(0xFFD6E6F3),
+            barStroke = Color(0xFF4F84AF),
+            textBoxFill = Color(0xFFEAF2F8),
+            barInk = ink,
+            barHint = hint,
+        )
+        "black", "b" -> MseSheetPalette(
+            framePlate = Color(0xFF393440),
+            bevelStroke = Color(0xFF1F1B24),
+            barFill = Color(0xFFC7C2CE),
+            barStroke = Color(0xFF585161),
+            textBoxFill = Color(0xFFE3E0E8),
+            barInk = ink,
+            barHint = hint,
+        )
+        "red", "r" -> MseSheetPalette(
+            framePlate = Color(0xFFB54434),
+            bevelStroke = Color(0xFF7D2A1F),
+            barFill = Color(0xFFF3DAD4),
+            barStroke = Color(0xFFA65246),
+            textBoxFill = Color(0xFFF9ECE9),
+            barInk = ink,
+            barHint = hint,
+        )
+        "green", "g" -> MseSheetPalette(
+            framePlate = Color(0xFF2F7248),
+            bevelStroke = Color(0xFF1D4D2F),
+            barFill = Color(0xFFD6E9DC),
+            barStroke = Color(0xFF4E8A65),
+            textBoxFill = Color(0xFFEBF4EE),
+            barInk = ink,
+            barHint = hint,
+        )
+        "multicolor", "gold", "m" -> MseSheetPalette(
+            framePlate = Color(0xFFC8A04A),
+            bevelStroke = Color(0xFF8C6B25),
+            barFill = Color(0xFFF4E8C6),
+            barStroke = Color(0xFFA6853C),
+            textBoxFill = Color(0xFFFAF3DF),
+            barInk = ink,
+            barHint = hint,
+        )
+        "artifact", "a" -> MseSheetPalette(
+            framePlate = Color(0xFF8A97A5),
+            bevelStroke = Color(0xFF5D6A78),
+            barFill = Color(0xFFDFE6EC),
+            barStroke = Color(0xFF7B8998),
+            textBoxFill = Color(0xFFEDF1F5),
+            barInk = ink,
+            barHint = hint,
+        )
+        "land", "l" -> MseSheetPalette(
+            framePlate = Color(0xFF968065),
+            bevelStroke = Color(0xFF66543F),
+            barFill = Color(0xFFE9DFD2),
+            barStroke = Color(0xFF8A755D),
+            textBoxFill = Color(0xFFF3ECE3),
+            barInk = ink,
+            barHint = hint,
+        )
+        else -> MseSheetPalette(
+            framePlate = Color(0xFFB5BAC4),
+            bevelStroke = Color(0xFF7B818E),
+            barFill = Color(0xFFE7E9EE),
+            barStroke = Color(0xFF8C92A0),
+            textBoxFill = Color(0xFFF3F4F7),
+            barInk = ink,
+            barHint = hint,
+        )
+    }
+}
+
+/**
+ * Resolves effective composite hitboxes for any `.mse-style`.
+ * When a scripted style (using `{ ... }` MSE expressions) yields empty or collapsed static
+ * hitboxes (`!styleSpec.hasValidCompositeGeometry()`), proportionally scales
+ * `MseStyleParser.defaultStandardGeometrySpec().hitboxes` from `(375, 523)` to
+ * `(styleSpec.cardWidthPx, styleSpec.cardHeightPx)` so overlays sit in exact spots over the real frame!
+ */
+internal fun resolveEffectiveCompositeHitboxes(styleSpec: MseStyleSpec): List<MseHitbox> {
+    if (styleSpec.hasValidCompositeGeometry()) {
+        return styleSpec.hitboxes
+    }
+    val base = MseStyleParser.defaultStandardGeometrySpec()
+    val targetW = styleSpec.cardWidthPx.coerceAtLeast(1).toFloat()
+    val targetH = styleSpec.cardHeightPx.coerceAtLeast(1).toFloat()
+    val sx = targetW / base.cardWidthPx.coerceAtLeast(1).toFloat()
+    val sy = targetH / base.cardHeightPx.coerceAtLeast(1).toFloat()
+    return base.hitboxes.map { h ->
+        h.copy(
+            left = h.left * sx,
+            top = h.top * sy,
+            width = h.width * sx,
+            height = h.height * sy,
+        )
     }
 }
 
@@ -1526,12 +1904,14 @@ private fun InvisibleAlignedHitboxes(
     val cardW = styleSpec.cardWidthPx.coerceAtLeast(1).toFloat()
     val cardH = styleSpec.cardHeightPx.coerceAtLeast(1).toFloat()
 
+    val effectiveHitboxes = remember(styleSpec) { resolveEffectiveCompositeHitboxes(styleSpec) }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val containerW = constraints.maxWidth.toFloat()
         val containerH = constraints.maxHeight.toFloat()
 
-        styleSpec.hitboxes.forEach { hitbox ->
+        effectiveHitboxes.forEach { hitbox ->
             val leftPx = (hitbox.left / cardW) * containerW
             val topPx = (hitbox.top / cardH) * containerH
             val widthDp = with(density) { ((hitbox.width / cardW) * containerW).toDp() }

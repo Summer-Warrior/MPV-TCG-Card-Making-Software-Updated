@@ -1,10 +1,14 @@
 package com.example.ui.nexus
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.core.AppContainer
 import com.example.data.nexus.AdminAlertLocalState
 import com.example.data.nexus.EngineSyncIngestionService
@@ -54,7 +58,7 @@ data class EngineSyncUiState(
     val companionEngineApp: InstalledCompanionAppInfo = InstalledCompanionAppInfo(),
     val isSyncingEngine: Boolean = false,
     val hasCompletedStartupSync: Boolean = false,
-    val lastSyncMessage: String = "Baseline loaded. Checking live Tcg-game-engine-test…",
+    val lastSyncMessage: String = "Local handshake baseline loaded (0 network calls).",
     val alignmentWarning: AlignmentWarningEvaluation? = null,
     val lastNotificationResults: List<NotificationChannelResult> = emptyList(),
     // Card Frame Reviewer state — strictly ZERO default 20-Color Pie colors selected
@@ -128,12 +132,135 @@ class EngineSyncViewModel(
                 )
             }
             recomputeFrameReview()
-            // Run live engine compatibility check automatically on launch unless paused
-            if (!adminState.syncPaused) {
-                syncLiveGameEngine(fineGrainedPat = null, isManualRefresh = false)
+            // STRICT LOCAL-FIRST HANDSHAKE: Never poll GitHub automatically on startup.
+            // Verify strictly against local handshake files + local companion app installation.
+            verifyLocalEngineHandshakeFiles(silent = true)
+        }
+    }
+
+    /**
+     * 100% offline local-file handshake verification:
+     * Reads local `nexus-app.json`, `handshake-contract.json`, `engine-sync-snapshot.json`,
+     * and `cached_engine_files.json` + local `installedAppsBridge.detectNexusTcgClient()`.
+     * Makes ZERO network calls.
+     */
+    fun verifyLocalEngineHandshakeFiles(silent: Boolean = false) {
+        viewModelScope.launch {
+            val appManifest = repository.loadAppManifest()
+            val contract = repository.loadContract()
+            val baseline = repository.loadBaselineSnapshot()
+            cachedEngineFiles = repository.loadCachedEngineFiles()
+            val companion = installedAppsBridge.detectNexusTcgClient()
+
+            val localHealth = EngineCompatibilityAuditor.runBenefitIntegrityAudit(
+                contract = contract,
+                commitSha = baseline.commitSha.ifBlank { "local-baseline" },
+                fetchedFiles = cachedEngineFiles,
+                missingFiles = emptyList(),
+                remoteEngineConsentStatus = contract.gameEngineConsent.status,
+                sourceRepo = appManifest.repo,
+            )
+            repository.saveHealthStatus(localHealth)
+
+            val companionNote = if (companion.isInstalled) {
+                "Companion installed (${companion.versionName.orEmpty().ifBlank { "detected" }})"
             } else {
-                _uiState.update { it.copy(hasCompletedStartupSync = true) }
+                "Companion not installed on device"
             }
+            val msg = "Verified locally from device handshake files (0 network calls). $companionNote."
+
+            _uiState.update { state ->
+                state.copy(
+                    appManifest = appManifest,
+                    contract = contract,
+                    baselineSnapshot = baseline,
+                    companionEngineApp = companion,
+                    healthStatus = localHealth,
+                    missingEngineFiles = emptyList(),
+                    hasCompletedStartupSync = true,
+                    lastSyncMessage = msg,
+                )
+            }
+            recomputeFrameReview()
+            if (!silent) {
+                _messages.tryEmit(msg)
+            }
+        }
+    }
+
+    /**
+     * Imports a local `handshake-contract.json` or `engine-sync-snapshot.json` exported from
+     * `Tcg-game-engine-test` via Android SAF, staging diffs strictly under Dual-Engine Consent offline.
+     */
+    fun importLocalEngineHandshakeFileUri(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            val rawText = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        stream.readBytes().toString(Charsets.UTF_8)
+                    }
+                }.onFailure { err ->
+                    Log.w("EngineSyncViewModel", "Failed reading local engine handshake URI: ${err.message}", err)
+                }.getOrNull()
+            }
+            if (rawText.isNullOrBlank()) {
+                _messages.tryEmit("Could not read selected local handshake JSON file.")
+                return@launch
+            }
+
+            val looksLikeContract = rawText.contains("\"cardMakerConsent\"") ||
+                rawText.contains("\"gameEngineConsent\"") ||
+                rawText.contains("\"contractVersion\"")
+            val looksLikeSnapshot = rawText.contains("\"baseVariants\"") ||
+                rawText.contains("\"schemaDefinitions\"") ||
+                rawText.contains("\"engineRepo\"")
+
+            if (looksLikeContract) {
+                val imported = repository.parseContractJson(rawText)
+                if (imported == null) {
+                    _messages.tryEmit("Invalid handshake-contract.json format.")
+                    return@launch
+                }
+                val current = _uiState.value.contract
+                val merged = current.copy(
+                    contractVersion = imported.contractVersion.ifBlank { current.contractVersion },
+                    masterHubRepo = imported.masterHubRepo.ifBlank { current.masterHubRepo },
+                    gameEngineConsent = imported.gameEngineConsent,
+                )
+                repository.saveContract(merged)
+                _uiState.update { it.copy(contract = merged) }
+                verifyLocalEngineHandshakeFiles(silent = true)
+                _messages.tryEmit(
+                    "Imported local handshake-contract.json (Game Engine consent: ${merged.gameEngineConsent.status} for ${merged.gameEngineConsent.commitSha.take(10).ifBlank { "baseline" }})."
+                )
+                return@launch
+            }
+
+            if (looksLikeSnapshot) {
+                val imported = repository.parseSnapshotJson(rawText)
+                if (imported == null) {
+                    _messages.tryEmit("Invalid engine-sync-snapshot.json format.")
+                    return@launch
+                }
+                val baseline = _uiState.value.baselineSnapshot
+                val diff = EngineCompatibilityAuditor.computeEngineDiff(baseline, imported)
+                _uiState.update { state ->
+                    state.copy(
+                        stagedSnapshot = imported,
+                        stagedDiff = diff,
+                        lastSyncMessage = "Staged local engine-sync-snapshot.json (${imported.commitSha.take(10)}) offline — Dual-Engine Consent required before finalizing.",
+                    )
+                }
+                recomputeFrameReview()
+                _messages.tryEmit(
+                    "Staged local engine snapshot (${imported.commitSha.take(10)}) offline. Record Dual-Engine Consent to finalize."
+                )
+                return@launch
+            }
+
+            _messages.tryEmit(
+                "Unrecognized local JSON. Select a handshake-contract.json or engine-sync-snapshot.json file."
+            )
         }
     }
 

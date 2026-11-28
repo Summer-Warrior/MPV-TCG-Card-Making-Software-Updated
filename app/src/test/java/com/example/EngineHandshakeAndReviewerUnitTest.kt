@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.data.nexus.NexusHubRepository
 import com.example.domain.nexus.CardEditorMode
 import com.example.domain.nexus.ConsentStatus
 import com.example.domain.nexus.DualConsentRecord
@@ -11,7 +12,10 @@ import com.example.domain.nexus.HandshakeContract
 import com.example.domain.nexus.MasterHubAdminGate
 import com.example.domain.nexus.MutualLinkStatus
 import com.example.domain.nexus.NexusAppManifest
+import com.example.domain.nexus.NexusRepoLinkManifest
+import com.example.domain.nexus.NexusSchemaValidator
 import com.example.domain.nexus.OmnichromaSacredCatalog
+import com.example.domain.nexus.SchemaValidationResult
 import com.example.ui.nexus.EngineSyncUiState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -346,4 +350,66 @@ class EngineHandshakeAndReviewerUnitTest {
         assertTrue(EngineCompatibilityAuditor.isMasterHubAdmin(gate, emptySet(), "", "ADMIN@NEXUS-HUB.ORG"))
         assertFalse(EngineCompatibilityAuditor.isMasterHubAdmin(gate, setOf("role_player_1"), "user_2", "player@example.com"))
     }
+
+    @Test
+    fun testLocalFileHandshakeVerifiesWithoutNetworkAndEnforcesDualConsent() {
+        val localManifest = NexusRepoLinkManifest()
+        val localIndex = NexusHubRepository.buildSeedClientIndex()
+        val localContract = HandshakeContract()
+        val localSnapshot = EngineSyncSnapshot(commitSha = "local-baseline-sha-101")
+
+        assertEquals("Summer-Warrior/Project-MPV-RP-Master-Hub", localManifest.linkedHubRepo)
+        assertEquals("Summer-Warrior/Project-MPV-RP-Master-Hub", localIndex.hubRepo)
+        assertEquals("Summer-Warrior/Project-MPV-RP-Master-Hub", localContract.masterHubRepo)
+
+        assertTrue(
+            "Local nexus-repo-link.json must pass offline schema validation",
+            NexusSchemaValidator.validateRepoLinkManifest(localManifest) is SchemaValidationResult.Valid,
+        )
+        assertTrue(
+            "Local client-codestring-index.json must pass offline schema validation",
+            NexusSchemaValidator.validateClientIndex(localIndex) is SchemaValidationResult.Valid,
+        )
+
+        // Verify local-files-only Benefit Integrity Audit returns HEALTHY without any network calls
+        val localHealth = EngineCompatibilityAuditor.runBenefitIntegrityAudit(
+            contract = localContract,
+            commitSha = localSnapshot.commitSha,
+            fetchedFiles = emptyMap(),
+            missingFiles = emptyList(),
+            remoteEngineConsentStatus = localContract.gameEngineConsent.status,
+            sourceRepo = localManifest.thisRepo,
+        )
+        assertEquals(EngineHealthSeverity.HEALTHY.wireValue, localHealth.severity)
+        assertEquals("NOT_REQUIRED", localHealth.masterHubAckStatus)
+        assertTrue(localHealth.brokenCapabilities.isEmpty())
+
+        // Enforce Dual-Engine Consent when staging an imported local snapshot offline
+        val targetSha = "offline-imported-sha-2026"
+        val cardMakerOnly = localContract.copy(
+            cardMakerConsent = DualConsentRecord(status = ConsentStatus.CONSENTED.wireValue, commitSha = targetSha),
+            gameEngineConsent = DualConsentRecord(status = ConsentStatus.PENDING.wireValue, commitSha = targetSha),
+        )
+        assertFalse(
+            "Only Card Maker consenting must NOT allow finalizing local staged snapshot",
+            EngineCompatibilityAuditor.canFinalizeEngineSync(cardMakerOnly, targetSha),
+        )
+
+        val mismatchedSha = cardMakerOnly.copy(
+            gameEngineConsent = DualConsentRecord(status = ConsentStatus.CONSENTED.wireValue, commitSha = "stale-sha-999"),
+        )
+        assertFalse(
+            "Different commit SHAs must NOT allow finalizing local staged snapshot",
+            EngineCompatibilityAuditor.canFinalizeEngineSync(mismatchedSha, targetSha),
+        )
+
+        val bothConsented = cardMakerOnly.copy(
+            gameEngineConsent = DualConsentRecord(status = ConsentStatus.CONSENTED.wireValue, commitSha = targetSha),
+        )
+        assertTrue(
+            "Both Card Maker and Game Engine consenting for exact SHA must unlock finalization",
+            EngineCompatibilityAuditor.canFinalizeEngineSync(bothConsented, targetSha),
+        )
+    }
 }
+

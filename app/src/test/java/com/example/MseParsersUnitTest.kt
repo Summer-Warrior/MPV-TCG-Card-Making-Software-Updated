@@ -418,5 +418,69 @@ class MseParsersUnitTest {
         assertTrue(!visibleNames.contains("loyalty"))
         assertTrue(!visibleNames.contains("image"))
     }
+
+    @Test
+    fun testScriptedStyleFallbackHitboxesAndLocalZipFrameBlacklist() {
+        val scriptedStyleText = """
+            mse version: 2.0.0
+            game: magic
+            short name: M15 Mainframe
+            full name: M15 Mainframe (Scripted Coordinates)
+            card width: 744
+            card height: 1039
+            card dpi: 300
+            card style:
+            	name:
+            		left: { name_left() }
+            		top: { name_top() }
+            		width: { name_width() }
+            		height: { name_height() }
+            	image:
+            		left: { image_left() }
+            		top: { image_top() }
+            		width: { image_width() }
+            		height: { image_height() }
+            	rule text:
+            		left: { rule_text_left() }
+            		top: { rule_text_top() }
+            		width: { rule_text_width() }
+            		height: { rule_text_height() }
+        """.trimIndent()
+
+        val spec = MseStyleParser.parseStyleText(scriptedStyleText, "magic-m15-altered.mse-style")
+        assertTrue(
+            "Scripted brace coordinate style must report hasValidCompositeGeometry() == false",
+            !spec.hasValidCompositeGeometry(),
+        )
+
+        val effectiveHitboxes = com.example.ui.workspace.resolveEffectiveCompositeHitboxes(spec)
+        assertTrue("Fallback hitboxes must never be empty", effectiveHitboxes.isNotEmpty())
+
+        val hitboxMap = effectiveHitboxes.associateBy { it.field }
+        assertTrue("Fallback hitboxes must contain 'image'", hitboxMap.containsKey("image"))
+        assertTrue("Fallback hitboxes must contain 'name'", hitboxMap.containsKey("name"))
+        assertTrue("Fallback hitboxes must contain 'rule text'", hitboxMap.containsKey("rule text"))
+
+        // Verify proportional scaling from 375x523 standard spec up to 744x1039
+        val standardSpec = MseStyleParser.defaultStandardGeometrySpec()
+        val stdName = standardSpec.hitboxes.first { it.field == "name" }
+        val scaledName = hitboxMap.getValue("name")
+        val expectedScaleX = 744f / standardSpec.cardWidthPx.toFloat()
+        val expectedScaleY = 1039f / standardSpec.cardHeightPx.toFloat()
+        assertEquals(stdName.left * expectedScaleX, scaledName.left, 0.5f)
+        assertEquals(stdName.top * expectedScaleY, scaledName.top, 0.5f)
+        assertEquals(stdName.width * expectedScaleX, scaledName.width, 0.5f)
+        assertEquals(stdName.height * expectedScaleY, scaledName.height, 0.5f)
+
+        // Verify local .mse-style ZIP blacklist rejects overlays while keeping full base frames
+        assertTrue(MseStyleParser.isBlacklistedNonCardAsset("20slice.png"))
+        assertTrue(MseStyleParser.isBlacklistedNonCardAsset("loyalty.png"))
+        assertTrue(MseStyleParser.isBlacklistedNonCardAsset("flashdot.png"))
+        assertTrue(MseStyleParser.isBlacklistedNonCardAsset("pt_box.png"))
+        assertTrue(!MseStyleParser.isBlacklistedNonCardAsset("ccard.jpg"))
+        assertTrue(!MseStyleParser.isBlacklistedNonCardAsset("wcard.jpg"))
+        assertTrue(!MseStyleParser.isBlacklistedNonCardAsset("mcard.jpg"))
+    }
 }
+
 

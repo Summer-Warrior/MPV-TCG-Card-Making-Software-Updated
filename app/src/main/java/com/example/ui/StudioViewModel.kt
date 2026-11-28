@@ -25,9 +25,14 @@ import com.example.data.mse.MseStyleSpec
 import com.example.data.mse.RecentSetRecord
 import com.example.data.mse.ResolvedOfflineFrame
 import com.example.data.mse.MseWorkspaceRepository
+import com.example.data.mse.MseStyleParser
 import com.example.data.settings.EngineSplit
 import com.example.data.settings.PhysicalCardProfile
 import com.example.data.settings.StudioSettings
+import com.example.data.upstream.BetaFrameCategory
+import com.example.data.upstream.BetaFrameCodePackage
+import com.example.data.upstream.BetaRadarUiState
+import com.example.data.upstream.DiscoveredBetaFrameItem
 import com.example.data.upstream.GitHubCommitCheckResult
 import com.example.data.upstream.UpstreamManifest
 import com.example.domain.comparison.CardOrigin
@@ -38,8 +43,10 @@ import com.example.domain.comparison.SplitOffKind
 import com.example.domain.comparison.SplitOffSetManifest
 import com.example.domain.frameworks.UniversalCardFramework
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -49,6 +56,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -160,7 +169,47 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
+    // ---- Foreground-Active Automatic Multi-Site Beta Card Frame Radar ----
+    private data class BetaRadarRuntimeFlags(
+        val isAppInForeground: Boolean = false,
+        val isScanning: Boolean = false,
+        val lastStatusMessage: String = "Cached Beta Frame Radar ready (foreground-only auto-check).",
+        val activeCodePackage: BetaFrameCodePackage? = null,
+        val isLoadingCodePackage: Boolean = false,
+        val codePackageError: String? = null,
+    )
+
+    private val _betaRadarRuntime = MutableStateFlow(BetaRadarRuntimeFlags())
+    private var foregroundBetaRadarJob: Job? = null
+
+    val betaRadarState: StateFlow<BetaRadarUiState> = combine(
+        container.betaFrameRadarRepository.persistedState,
+        _betaRadarRuntime,
+    ) { persisted, runtime ->
+        BetaRadarUiState(
+            items = persisted.cachedItems,
+            feeds = container.betaFrameRadarRepository.allFeeds(persisted),
+            autoCheckWhenOnline = persisted.autoCheckWhenOnline,
+            isAppInForeground = runtime.isAppInForeground,
+            isScanning = runtime.isScanning,
+            lastCheckedEpochMs = persisted.lastCheckedEpochMs,
+            lastStatusMessage = runtime.lastStatusMessage,
+            activeCodePackage = runtime.activeCodePackage,
+            isLoadingCodePackage = runtime.isLoadingCodePackage,
+            codePackageError = runtime.codePackageError,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BetaRadarUiState())
+
     init {
+        viewModelScope.launch {
+            var wasOnline = isDeviceOnline.value
+            isDeviceOnline.collect { onlineNow ->
+                if (!wasOnline && onlineNow && _betaRadarRuntime.value.isAppInForeground) {
+                    maybeRunForegroundBetaRadarScan(force = false)
+                }
+                wasOnline = onlineNow
+            }
+        }
         viewModelScope.launch {
             styleSpec.collect { spec ->
                 container.fontCatalogRepository.updateStyleReferencedFonts(spec.referencedFonts)
@@ -171,7 +220,7 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                 container.fontCatalogRepository.updateDiscoveredPackFonts(packFonts)
             }
         }
-        // Re-resolve active style spec & offline frame once dynamic catalog finishes indexing
+        // Re-resolve active style spec & locally cached offline frame when catalog updates (zero network calls)
         viewModelScope.launch {
             discoveredStyles.collect {
                 val active = archive.value ?: return@collect
@@ -182,16 +231,13 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
                 if (matched != null) {
                     val currentKey = "${matched.packRepo}:${matched.folderName}"
                     if (_offlineFrame.value?.styleKey != currentKey) {
-                        resolveOfflineBaseFrameForStyle(matched)
+                        resolveOfflineBaseFrameForStyle(matched, allowNetwork = false)
                     }
                 }
             }
         }
-        viewModelScope.launch {
-            if (container.networkConnectivityMonitor.checkIsOnlineNow()) {
-                container.mseTemplateCatalogRepository.syncCatalog(forceRefresh = false)
-            }
-        }
+        // STRICT LOCAL-FIRST BOOT: Do NOT automatically hit GitHub API on launch.
+        // Online template catalog sync & upstream update checks are explicit user-triggered actions only.
         checkBridgeHealth(autoRenderIfOnline = false)
     }
 
@@ -218,14 +264,67 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun selectOfflineFrameVariant(variantKey: String) {
-        val current = _offlineFrame.value ?: return
-        _offlineFrame.value = current.copy(activeVariantKey = variantKey)
-        // Persist chosen card color cleanly into the `.mse-set` card record
+        val current = _offlineFrame.value
+        if (current != null) {
+            _offlineFrame.value = current.copy(activeVariantKey = variantKey)
+        }
+        // Persist chosen card color cleanly into the `.mse-set` card record (works for both cached PNGs and MSE sheet fallback)
         val activeIdx = activeCardIndex.value
         val activeArchive = archive.value ?: return
-        if (activeArchive.document.game.equals("magic", ignoreCase = true)) {
+        if (activeArchive.document.game.equals("magic", ignoreCase = true) || current == null) {
             viewModelScope.launch {
                 container.mseWorkspaceRepository.updateCardField(activeIdx, "card color", variantKey)
+            }
+        }
+    }
+
+    /**
+     * Explicit online action to download & persistently cache real full-card base frames to local disk.
+     * Uses direct unmetered raw CDN for Magic styles (zero GitHub REST API rate-limit burn).
+     */
+    fun syncActiveStyleFramesOnline() {
+        if (!container.networkConnectivityMonitor.checkIsOnlineNow()) {
+            _messages.tryEmit("Offline mode — connect to the internet or load a local .mse-style ZIP to cache real card frames.")
+            return
+        }
+        val activeArchive = archive.value ?: return
+        val gameId = activeArchive.document.game.ifBlank { "magic" }
+        val stylesheetId = activeArchive.document.stylesheet.ifBlank { "m15-altered" }
+        val matched = container.mseTemplateCatalogRepository.findStyle(gameId, stylesheetId)
+        val targetStyle = matched ?: DiscoveredStyle(
+            stylesheetId = stylesheetId,
+            folderName = if (gameId.equals("magic", ignoreCase = true)) "magic-m15-altered.mse-style" else "$gameId-$stylesheetId.mse-style",
+            gameId = gameId,
+            fullName = styleSpec.value.fullName,
+            shortName = styleSpec.value.shortName,
+            packRepo = if (gameId.equals("magic", ignoreCase = true)) "Full-Magic-Pack" else "Full-Non-Magic-Pack",
+            packBranch = "main",
+            packLabel = if (gameId.equals("magic", ignoreCase = true)) "Full-Magic-Pack" else "Full-Non-Magic-Pack",
+            usesScriptedBackground = true,
+        )
+        viewModelScope.launch {
+            val styleKey = "${targetStyle.packRepo}:${targetStyle.folderName}"
+            _offlineFrame.value = ResolvedOfflineFrame(
+                styleKey = styleKey,
+                variants = _offlineFrame.value?.variants.orEmpty(),
+                activeVariantKey = _offlineFrame.value?.activeVariantKey,
+                isLoading = true,
+            )
+            val variants = container.mseTemplateCatalogRepository.resolveOfflineFrameVariants(
+                style = targetStyle,
+                allowNetwork = true,
+            )
+            val inferredKey = inferActiveVariantKeyForCurrentCard(variants)
+            _offlineFrame.value = ResolvedOfflineFrame(
+                styleKey = styleKey,
+                variants = variants,
+                activeVariantKey = inferredKey,
+                isLoading = false,
+            )
+            if (variants.isNotEmpty()) {
+                _messages.tryEmit("Cached ${variants.size} real card frame(s) locally for 100% offline use.")
+            } else {
+                _messages.tryEmit("No portrait base-frame images found upstream for '${targetStyle.displayName}'. Import a local .mse-style ZIP instead.")
             }
         }
     }
@@ -233,20 +332,61 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
     fun resolveLocalFontFile(familyName: String?): File? =
         container.fontCatalogRepository.resolveLocalFontFile(familyName)
 
-    private fun resolveOfflineBaseFrameForStyle(style: DiscoveredStyle?) {
-        if (style == null) {
+    private fun resolveOfflineBaseFrameForStyle(
+        style: DiscoveredStyle?,
+        allowNetwork: Boolean = false,
+    ) {
+        val activeArchive = archive.value
+        if (style == null && activeArchive == null) {
             _offlineFrame.value = null
             return
         }
-        val styleKey = "${style.packRepo}:${style.folderName}"
+        val gameId = style?.gameId ?: activeArchive?.document?.game.orEmpty().ifBlank { "magic" }
+        val stylesheetId = style?.stylesheetId ?: activeArchive?.document?.stylesheet.orEmpty().ifBlank { "m15-altered" }
+        val styleKey = if (style != null) {
+            "${style.packRepo}:${style.folderName}"
+        } else {
+            "local:$gameId-$stylesheetId"
+        }
+
         viewModelScope.launch {
+            val cachedLocal = withContext(Dispatchers.IO) {
+                container.mseTemplateCatalogRepository.loadCachedFrameVariantsForStyle(
+                    gameId = gameId,
+                    stylesheetId = stylesheetId,
+                    folderName = style?.folderName,
+                )
+            }
+            if (cachedLocal.isNotEmpty()) {
+                val inferredKey = inferActiveVariantKeyForCurrentCard(cachedLocal)
+                _offlineFrame.value = ResolvedOfflineFrame(
+                    styleKey = styleKey,
+                    variants = cachedLocal,
+                    activeVariantKey = inferredKey,
+                    isLoading = false,
+                )
+                return@launch
+            }
+            if (!allowNetwork || style == null) {
+                _offlineFrame.value = ResolvedOfflineFrame(
+                    styleKey = styleKey,
+                    variants = emptyList(),
+                    activeVariantKey = null,
+                    isLoading = false,
+                )
+                return@launch
+            }
+
             _offlineFrame.value = ResolvedOfflineFrame(
                 styleKey = styleKey,
                 variants = emptyList(),
                 activeVariantKey = null,
                 isLoading = true,
             )
-            val variants = container.mseTemplateCatalogRepository.resolveOfflineFrameVariants(style)
+            val variants = container.mseTemplateCatalogRepository.resolveOfflineFrameVariants(
+                style = style,
+                allowNetwork = true,
+            )
             val inferredKey = inferActiveVariantKeyForCurrentCard(variants)
             _offlineFrame.value = ResolvedOfflineFrame(
                 styleKey = styleKey,
@@ -814,9 +954,32 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
 
     fun loadMseStyleUri(uri: Uri) {
         viewModelScope.launch {
-            container.mseWorkspaceRepository.loadStyleFromUri(uri)
-                .onSuccess { parsed ->
-                    _messages.tryEmit("Loaded style '${parsed.shortName}' (${parsed.cardWidthPx}×${parsed.cardHeightPx} @ ${parsed.cardDpi} DPI)")
+            container.mseWorkspaceRepository.loadStyleWithBytesFromUri(uri)
+                .onSuccess { (parsed, rawBytes) ->
+                    val extracted = withContext(Dispatchers.IO) {
+                        container.mseTemplateCatalogRepository.extractLocalStyleZipFrames(
+                            styleId = parsed.stylesheetId,
+                            zipBytes = rawBytes,
+                            gameId = parsed.game,
+                        )
+                    }
+                    if (extracted.isNotEmpty()) {
+                        val inferredKey = inferActiveVariantKeyForCurrentCard(extracted)
+                        _offlineFrame.value = ResolvedOfflineFrame(
+                            styleKey = "local_zip:${parsed.stylesheetId}",
+                            variants = extracted,
+                            activeVariantKey = inferredKey,
+                            isLoading = false,
+                        )
+                        _messages.tryEmit(
+                            "Loaded style '${parsed.shortName}' with ${extracted.size} real offline frame(s) cached."
+                        )
+                    } else {
+                        resolveOfflineBaseFrameForStyle(style = null, allowNetwork = false)
+                        _messages.tryEmit(
+                            "Loaded style '${parsed.shortName}' (${parsed.cardWidthPx}×${parsed.cardHeightPx} @ ${parsed.cardDpi} DPI)"
+                        )
+                    }
                 }
                 .onFailure { _messages.tryEmit("Could not load .mse-style: ${it.message}") }
         }
@@ -1157,7 +1320,209 @@ class StudioViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    // ---- Foreground-Only Beta Card Frame Radar Controls ----
+
+    /**
+     * Starts or cancels the foreground-only automatic Beta Frame Radar loop (`ON_START`..`ON_STOP`).
+     * Never runs while the app is backgrounded; respects 15-minute cooldown + ETag cache.
+     */
+    fun setAppInForegroundForBetaRadar(inForeground: Boolean) {
+        _betaRadarRuntime.update { it.copy(isAppInForeground = inForeground) }
+        foregroundBetaRadarJob?.cancel()
+        foregroundBetaRadarJob = null
+
+        if (!inForeground) return
+
+        foregroundBetaRadarJob = viewModelScope.launch {
+            while (isActive) {
+                maybeRunForegroundBetaRadarScan(force = false)
+                delay(BETA_RADAR_COOLDOWN_MS)
+            }
+        }
+    }
+
+    private suspend fun maybeRunForegroundBetaRadarScan(force: Boolean) {
+        val persisted = container.betaFrameRadarRepository.persistedState.value
+        val runtime = _betaRadarRuntime.value
+        if (runtime.isScanning) return
+
+        if (!force) {
+            val shouldRun = shouldRunAutomaticForegroundCheck(
+                inForeground = runtime.isAppInForeground,
+                isOnline = isDeviceOnline.value,
+                autoCheckEnabled = persisted.autoCheckWhenOnline,
+                lastCheckedMs = persisted.lastCheckedEpochMs,
+                nowMs = System.currentTimeMillis(),
+                cooldownMs = BETA_RADAR_COOLDOWN_MS,
+            )
+            if (!shouldRun) return
+        } else if (!isDeviceOnline.value) {
+            _messages.tryEmit("Device is offline — showing cached Beta Frame Radar results.")
+            return
+        }
+
+        _betaRadarRuntime.update {
+            it.copy(
+                isScanning = true,
+                lastStatusMessage = "Scanning verified public frame feeds…",
+            )
+        }
+        val knownIds = discoveredGames.value.map { it.gameId.lowercase() }.toSet()
+        val scanResult = container.betaFrameRadarRepository.runRadarScan(knownGameIds = knownIds)
+        _betaRadarRuntime.update {
+            it.copy(
+                isScanning = false,
+                lastStatusMessage = scanResult.statusSummary,
+            )
+        }
+        if (force) {
+            _messages.tryEmit(scanResult.statusSummary)
+        }
+    }
+
+    fun runBetaRadarScanNow() {
+        viewModelScope.launch {
+            maybeRunForegroundBetaRadarScan(force = true)
+        }
+    }
+
+    fun setBetaRadarAutoCheck(enabled: Boolean) {
+        viewModelScope.launch {
+            container.betaFrameRadarRepository.setAutoCheckWhenOnline(enabled)
+            if (enabled && _betaRadarRuntime.value.isAppInForeground) {
+                maybeRunForegroundBetaRadarScan(force = false)
+            }
+        }
+    }
+
+    fun markBetaRadarAllSeen() {
+        viewModelScope.launch {
+            container.betaFrameRadarRepository.markAllSeen()
+            _messages.tryEmit("Marked all Beta Frame Radar items as seen.")
+        }
+    }
+
+    fun addCustomBetaRadarFeed(
+        label: String,
+        targetInput: String,
+        category: BetaFrameCategory,
+    ) {
+        viewModelScope.launch {
+            container.betaFrameRadarRepository.addCustomFeed(label, targetInput, category)
+                .onSuccess { feed ->
+                    _messages.tryEmit("Added Beta Radar feed '${feed.label}'.")
+                    if (isDeviceOnline.value) {
+                        maybeRunForegroundBetaRadarScan(force = true)
+                    }
+                }
+                .onFailure { err ->
+                    _messages.tryEmit(err.message ?: "Could not add custom Beta Radar feed.")
+                }
+        }
+    }
+
+    fun removeCustomBetaRadarFeed(feedId: String) {
+        viewModelScope.launch {
+            container.betaFrameRadarRepository.removeCustomFeed(feedId)
+            _messages.tryEmit("Removed custom Beta Radar feed.")
+        }
+    }
+
+    fun inspectBetaFrameCode(item: DiscoveredBetaFrameItem) {
+        viewModelScope.launch {
+            _betaRadarRuntime.update {
+                it.copy(
+                    isLoadingCodePackage = true,
+                    codePackageError = null,
+                    activeCodePackage = null,
+                )
+            }
+            container.betaFrameRadarRepository.fetchBetaFrameCodePackage(item)
+                .onSuccess { pkg ->
+                    _betaRadarRuntime.update {
+                        it.copy(
+                            isLoadingCodePackage = false,
+                            activeCodePackage = pkg,
+                            codePackageError = null,
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    val msg = err.message ?: "Failed preparing Beta Frame code package."
+                    _betaRadarRuntime.update {
+                        it.copy(
+                            isLoadingCodePackage = false,
+                            activeCodePackage = null,
+                            codePackageError = msg,
+                        )
+                    }
+                    _messages.tryEmit(msg)
+                }
+        }
+    }
+
+    fun dismissBetaFrameCodeDialog() {
+        _betaRadarRuntime.update {
+            it.copy(
+                activeCodePackage = null,
+                isLoadingCodePackage = false,
+                codePackageError = null,
+            )
+        }
+    }
+
+    fun saveBetaCodePackageToUri(uri: Uri, pkg: BetaFrameCodePackage) {
+        viewModelScope.launch {
+            container.betaFrameRadarRepository.saveCodePackageToUri(uri, pkg)
+                .onSuccess { _messages.tryEmit("Saved ${pkg.item.displayName} Beta code file (.txt).") }
+                .onFailure { _messages.tryEmit("Export failed: ${it.message}") }
+        }
+    }
+
+    fun applyBetaFrameCodeToActiveSet(pkg: BetaFrameCodePackage) {
+        viewModelScope.launch {
+            val parsedSpec = MseStyleParser.parseStyleText(
+                rawText = pkg.rawStyleCode,
+                sourceLabel = pkg.item.folderName.ifBlank { pkg.item.id },
+            )
+            val sheetId = pkg.item.folderName.removeSuffix(".mse-style").ifBlank { pkg.item.id }
+            val updated = container.mseWorkspaceRepository.applyRawStyleSpec(
+                spec = parsedSpec,
+                stylesheetId = sheetId,
+            )
+            if (updated != null) {
+                _messages.tryEmit(
+                    "Applied ${pkg.item.effectiveStatusBadge()} '${pkg.item.displayName}' (${parsedSpec.cardWidthPx}×${parsedSpec.cardHeightPx}) to active set."
+                )
+            } else {
+                _messages.tryEmit(
+                    "Loaded ${pkg.item.effectiveStatusBadge()} style '${pkg.item.displayName}' into active geometry (open a set to use it)."
+                )
+            }
+        }
+    }
+
     companion object {
+        const val BETA_RADAR_COOLDOWN_MS: Long = 15L * 60L * 1000L
+
+        /**
+         * Pure testable foreground-only gate preventing any background automatic Beta Radar traffic.
+         */
+        fun shouldRunAutomaticForegroundCheck(
+            inForeground: Boolean,
+            isOnline: Boolean,
+            autoCheckEnabled: Boolean,
+            lastCheckedMs: Long,
+            nowMs: Long,
+            cooldownMs: Long = BETA_RADAR_COOLDOWN_MS,
+        ): Boolean {
+            if (!inForeground) return false
+            if (!isOnline) return false
+            if (!autoCheckEnabled) return false
+            if (lastCheckedMs <= 0L) return true
+            return (nowMs - lastCheckedMs) >= cooldownMs
+        }
+
         fun factory(container: AppContainer): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")

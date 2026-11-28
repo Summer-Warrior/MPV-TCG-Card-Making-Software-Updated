@@ -305,19 +305,9 @@ object NexusSchemaValidator {
         }
     }
 
-    fun parseAndValidateIndex(
-        moshi: Moshi,
-        rawJson: String,
+    fun validateClientIndex(
+        parsed: NexusClientCodestringIndex,
     ): SchemaValidationResult<NexusClientCodestringIndex> {
-        val adapter = moshi.adapter(NexusClientCodestringIndex::class.java)
-        val parsed = try {
-            adapter.fromJson(rawJson)
-        } catch (ex: Exception) {
-            return SchemaValidationResult.Invalid(
-                listOf("JSON schema parse failure: ${ex.message ?: ex::class.java.simpleName}")
-            )
-        } ?: return SchemaValidationResult.Invalid(listOf("Empty client-codestring-index.json payload."))
-
         val errors = mutableListOf<String>()
         if (!semverRegex.matches(parsed.schemaVersion.trim())) {
             errors += "schemaVersion '${parsed.schemaVersion}' is not valid semver."
@@ -341,6 +331,22 @@ object NexusSchemaValidator {
         } else {
             SchemaValidationResult.Invalid(errors)
         }
+    }
+
+    fun parseAndValidateIndex(
+        moshi: Moshi,
+        rawJson: String,
+    ): SchemaValidationResult<NexusClientCodestringIndex> {
+        val adapter = moshi.adapter(NexusClientCodestringIndex::class.java)
+        val parsed = try {
+            adapter.fromJson(rawJson)
+        } catch (ex: Exception) {
+            return SchemaValidationResult.Invalid(
+                listOf("JSON schema parse failure: ${ex.message ?: ex::class.java.simpleName}")
+            )
+        } ?: return SchemaValidationResult.Invalid(listOf("Empty client-codestring-index.json payload."))
+
+        return validateClientIndex(parsed)
     }
 
     fun computeChangelogDiff(

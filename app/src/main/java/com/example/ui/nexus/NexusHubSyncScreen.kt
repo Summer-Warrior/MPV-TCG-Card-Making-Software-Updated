@@ -28,15 +28,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -95,6 +98,7 @@ fun NexusHubSyncScreen(
     uiState: NexusHubUiState,
     engineSyncState: EngineSyncUiState,
     engineSyncViewModel: EngineSyncViewModel,
+    isDeviceOnline: Boolean = false,
     autoTriggerSync: Boolean,
     requestedTabIndex: Int? = null,
     activeMseCardName: String?,
@@ -106,6 +110,10 @@ fun NexusHubSyncScreen(
     onTabRequestConsumed: () -> Unit = {},
     onLaunchNexusTcgApp: () -> Unit = {},
     onSaveManifest: (NexusRepoLinkManifest) -> Unit,
+    onVerifyLocalHubFiles: () -> Unit = {},
+    onImportLocalHubFileUri: (Uri) -> Unit = {},
+    onVerifyLocalEngineFiles: () -> Unit = {},
+    onImportLocalEngineFileUri: (Uri) -> Unit = {},
     onVerifyAndPullHub: () -> Unit,
     onApplyPendingDiff: () -> Unit,
     onDismissPendingDiff: () -> Unit,
@@ -141,12 +149,28 @@ fun NexusHubSyncScreen(
         }
     }
 
-    // Supports ?hubSync=1 deep-link / intent handshake trigger
+    // Supports ?hubSync=1 deep-link / intent handshake trigger strictly from local files (0 forced network calls)
     LaunchedEffect(autoTriggerSync) {
         if (autoTriggerSync) {
-            onVerifyAndPullHub()
-            engineSyncViewModel.syncLiveGameEngine(uiState.fineGrainedPat.ifBlank { null }, isManualRefresh = true)
+            onVerifyLocalHubFiles()
+            onVerifyLocalEngineFiles()
             onAutoSyncConsumed()
+        }
+    }
+
+    val importLocalHubFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            onImportLocalHubFileUri(uri)
+        }
+    }
+
+    val importLocalEngineFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            onImportLocalEngineFileUri(uri)
         }
     }
 
@@ -228,7 +252,12 @@ fun NexusHubSyncScreen(
             NexusHubSection.SYNC_LINK -> {
                 SyncAndLinkTab(
                     uiState = uiState,
+                    isDeviceOnline = isDeviceOnline,
                     onSaveManifest = onSaveManifest,
+                    onVerifyLocalHubFiles = onVerifyLocalHubFiles,
+                    onImportLocalHubFile = {
+                        importLocalHubFileLauncher.launch(arrayOf("application/json", "*/*"))
+                    },
                     onVerifyAndPullHub = onVerifyAndPullHub,
                     onApplyPendingDiff = onApplyPendingDiff,
                     onDismissPendingDiff = onDismissPendingDiff,
@@ -249,7 +278,12 @@ fun NexusHubSyncScreen(
             NexusHubSection.ENGINE_SYNC -> {
                 EngineSyncSection(
                     uiState = engineSyncState,
+                    isDeviceOnline = isDeviceOnline,
                     fineGrainedPat = uiState.fineGrainedPat,
+                    onVerifyLocalEngineFiles = onVerifyLocalEngineFiles,
+                    onImportLocalEngineFile = {
+                        importLocalEngineFileLauncher.launch(arrayOf("application/json", "*/*"))
+                    },
                     onSyncLiveEngine = {
                         engineSyncViewModel.syncLiveGameEngine(uiState.fineGrainedPat.ifBlank { null }, isManualRefresh = true)
                     },
@@ -348,7 +382,10 @@ fun NexusHubSyncScreen(
 @Composable
 private fun SyncAndLinkTab(
     uiState: NexusHubUiState,
+    isDeviceOnline: Boolean,
     onSaveManifest: (NexusRepoLinkManifest) -> Unit,
+    onVerifyLocalHubFiles: () -> Unit,
+    onImportLocalHubFile: () -> Unit,
     onVerifyAndPullHub: () -> Unit,
     onApplyPendingDiff: () -> Unit,
     onDismissPendingDiff: () -> Unit,
@@ -424,9 +461,35 @@ private fun SyncAndLinkTab(
                         )
                     }
 
-                    Button(
+                    // Primary local-first handshake actions (100% offline, 0 network calls)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = onVerifyLocalHubFiles,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("nexus_verify_local_files_button"),
+                        ) {
+                            Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Verify Local Handshake Files", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        OutlinedButton(
+                            onClick = onImportLocalHubFile,
+                            modifier = Modifier.testTag("nexus_import_local_file_button"),
+                        ) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Import JSON")
+                        }
+                    }
+
+                    // Explicit opt-in online update check (strictly gated on device connectivity)
+                    OutlinedButton(
                         onClick = onVerifyAndPullHub,
-                        enabled = !uiState.isCheckingHub,
+                        enabled = isDeviceOnline && !uiState.isCheckingHub,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("nexus_verify_and_pull_button"),
@@ -435,14 +498,19 @@ private fun SyncAndLinkTab(
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
                                 strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimary,
                             )
                             Spacer(Modifier.width(8.dp))
-                            Text("Verifying Mutual Link & Pulling Index…")
+                            Text("Checking Online Hub Updates…")
                         } else {
-                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("Verify Link & Check Hub Updates")
+                            Text(
+                                if (isDeviceOnline) {
+                                    "Optional Online Update Check (GitHub)"
+                                } else {
+                                    "Offline — Online Update Check Paused"
+                                }
+                            )
                         }
                     }
                 }

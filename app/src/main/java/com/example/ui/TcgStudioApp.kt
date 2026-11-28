@@ -129,6 +129,7 @@ fun TcgStudioApp(
     val activeFramework by viewModel.activeFramework.collectAsStateWithLifecycle()
     val comparisonState by setComparisonViewModel.uiState.collectAsStateWithLifecycle()
     val usageReportsState by cardUsageReportsViewModel.uiState.collectAsStateWithLifecycle()
+    val betaRadarState by viewModel.betaRadarState.collectAsStateWithLifecycle()
 
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -210,23 +211,36 @@ fun TcgStudioApp(
     val lifecycleOwner = LocalLifecycleOwner.current
     var hasCompletedFirstResume by remember { mutableStateOf(false) }
 
-    // Re-run lightweight ETag-cached cross-repo checks whenever the user reopens the installed app while online
-    DisposableEffect(lifecycleOwner, isDeviceOnline) {
+    // Foreground-only Beta Frame Radar (`ON_START`..`ON_STOP`) + strictly local-only handshake checks on `ON_RESUME`
+    DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                if (!hasCompletedFirstResume) {
-                    hasCompletedFirstResume = true
-                } else {
-                    engineSyncViewModel.refreshCompanionAppStatus()
-                    if (isDeviceOnline) {
-                        engineSyncViewModel.syncLiveGameEngine(fineGrainedPat = null, isManualRefresh = false)
-                        nexusHubViewModel.verifyMutualLinkAndCheckHub(silent = true)
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    viewModel.setAppInForegroundForBetaRadar(true)
+                }
+
+                Lifecycle.Event.ON_STOP -> {
+                    viewModel.setAppInForegroundForBetaRadar(false)
+                }
+
+                Lifecycle.Event.ON_RESUME -> {
+                    if (!hasCompletedFirstResume) {
+                        hasCompletedFirstResume = true
+                    } else {
+                        engineSyncViewModel.refreshCompanionAppStatus()
+                        engineSyncViewModel.verifyLocalEngineHandshakeFiles(silent = true)
+                        nexusHubViewModel.verifyLocalFilesHandshake(silent = true)
                     }
                 }
+
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            viewModel.setAppInForegroundForBetaRadar(false)
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     // Automatic on-open cross-repository alignment evaluation (Engine + Master Hub + Dual-Engine Consent)
@@ -388,6 +402,7 @@ fun TcgStudioApp(
                         onGenerateFrameworkScaffold = viewModel::generateAndValidateFrameworkScaffold,
                         onOpenOfficialSetComparison = { navController.navigate(StudioRoutes.SET_COMPARISON) },
                         onOpenUsageReports = { navController.navigate(StudioRoutes.USAGE_REPORTS) },
+                        betaNewCount = betaRadarState.newCount,
                     )
                 }
 
@@ -414,10 +429,12 @@ fun TcgStudioApp(
                             catalogSyncState = catalogSyncState,
                             fonts = fonts,
                             isFontBusy = isFontBusy,
+                            isDeviceOnline = isDeviceOnline,
                             resolveLocalFontFile = viewModel::resolveLocalFontFile,
                             onUndo = viewModel::undo,
                             onRedo = viewModel::redo,
                             onRefreshCatalog = viewModel::refreshTemplateCatalog,
+                            onSyncFramesOnline = viewModel::syncActiveStyleFramesOnline,
                             onSelectOfflineFrameVariant = viewModel::selectOfflineFrameVariant,
                             onRequestCloseSet = {
                                 viewModel.closeActiveSet {
@@ -574,6 +591,19 @@ fun TcgStudioApp(
                             onAddConnector = viewModel::addOpenResourceConnector,
                             onRemoveConnector = viewModel::removeOpenResourceConnector,
                             onSaveRawManifestJson = viewModel::saveRawManifestJson,
+                            betaRadarState = betaRadarState,
+                            onBetaRadarCheckNow = viewModel::runBetaRadarScanNow,
+                            onBetaRadarToggleAutoCheck = viewModel::setBetaRadarAutoCheck,
+                            onBetaRadarMarkAllSeen = viewModel::markBetaRadarAllSeen,
+                            onBetaRadarAddCustomFeed = viewModel::addCustomBetaRadarFeed,
+                            onBetaRadarRemoveCustomFeed = viewModel::removeCustomBetaRadarFeed,
+                            onBetaRadarInspectCode = viewModel::inspectBetaFrameCode,
+                            onBetaRadarDismissCodeDialog = viewModel::dismissBetaFrameCodeDialog,
+                            onBetaRadarSaveCodeToUri = viewModel::saveBetaCodePackageToUri,
+                            onBetaRadarApplyCodeToSet = viewModel::applyBetaFrameCodeToActiveSet,
+                            onNotify = { msg ->
+                                uiScope.launch { snackbarHostState.showSnackbar(msg) }
+                            },
                         )
                     }
                 }
@@ -609,6 +639,7 @@ fun TcgStudioApp(
                             uiState = nexusHubState,
                             engineSyncState = engineSyncState,
                             engineSyncViewModel = engineSyncViewModel,
+                            isDeviceOnline = isDeviceOnline,
                             autoTriggerSync = pendingAutoSync,
                             requestedTabIndex = requestedHubTabIndex,
                             activeMseCardName = activeCard?.name,
@@ -620,6 +651,10 @@ fun TcgStudioApp(
                             onTabRequestConsumed = { requestedHubTabIndex = null },
                             onLaunchNexusTcgApp = ::launchNexusTcgHandshake,
                             onSaveManifest = nexusHubViewModel::updateManifest,
+                            onVerifyLocalHubFiles = { nexusHubViewModel.verifyLocalFilesHandshake(silent = false) },
+                            onImportLocalHubFileUri = { uri -> nexusHubViewModel.importLocalHandshakeFileUri(context, uri) },
+                            onVerifyLocalEngineFiles = { engineSyncViewModel.verifyLocalEngineHandshakeFiles(silent = false) },
+                            onImportLocalEngineFileUri = { uri -> engineSyncViewModel.importLocalEngineHandshakeFileUri(context, uri) },
                             onVerifyAndPullHub = { nexusHubViewModel.verifyMutualLinkAndCheckHub(silent = false) },
                             onApplyPendingDiff = nexusHubViewModel::applyPendingHubIndexUpdate,
                             onDismissPendingDiff = nexusHubViewModel::dismissPendingHubDiff,
